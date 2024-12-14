@@ -1,11 +1,15 @@
 import os
 from os import path
 import json
-
+import pdb
 from inference.data.video_reader import VideoReader_221128_TransColorization
 
 class DAVISTestDataset_221128_TransColorization_batch:
     def __init__(self, data_root, imset='2017/val.txt', size=-1):
+        # data_root = 'input/blackswan'
+        # imset = 'ref/blackswan/00000.png'
+        # size = -1
+        
         self.image_dir = data_root
         self.mask_dir = imset
         self.size_dir = data_root
@@ -14,6 +18,7 @@ class DAVISTestDataset_221128_TransColorization_batch:
         self.vid_list =  [clip_name for clip_name in sorted(os.listdir(data_root)) if clip_name != '.DS_Store' and not clip_name.startswith('.')]
 
         # print(lst, len(lst), self.vid_list, self.vid_list_DAVIS2016, path.join(data_root, 'ImageSets', imset));assert 1==0
+        #pdb.set_trace()
 
     def get_datasets(self):
         for video in self.vid_list:

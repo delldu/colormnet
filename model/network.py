@@ -9,142 +9,112 @@ It further depends on modules.py which gives more detailed implementations of su
 import torch
 import torch.nn as nn
 
-from model.aggregate import aggregate
+# from model.aggregate import aggregate
 from model.modules import *
 from model.memory_util import *
 
 from model.attention import LocalGatedPropagation
+import todos
+import pdb
 
 class ColorMNet(nn.Module):
     def __init__(self, config, model_path=None, map_location=None):
-        """
-        model_path/map_location are used in evaluation only
-        map_location is for converting models saved in cuda to cpu
-        """
         super().__init__()
-        model_weights = self.init_hyperparameters(config, model_path, map_location)
-
-        self.single_object = config.get('single_object', False)
-        print(f'Single object mode: {self.single_object}')
+        self.key_dim = 64
+        self.value_dim = 512
+        self.hidden_dim = 64
+        config['key_dim'] = self.key_dim
+        config['value_dim'] = self.value_dim
+        config['hidden_dim'] = self.hidden_dim
 
         self.key_encoder = KeyEncoder_DINOv2_v6()
-
-        self.value_encoder = ValueEncoder(self.value_dim, self.hidden_dim, self.single_object)
-
         # Projection from f16 feature space to key/value space
         self.key_proj = KeyProjection(1024, self.key_dim) # 1024 -> 384 -> 3072
 
-        self.short_term_attn = LocalGatedPropagation(d_qk=64, # 256
-                                          d_vu=512 * 2,
-                                          num_head=1,
-                                          dilation=1,
-                                          use_linear=False,
-                                          dropout=0,
-                                          d_att=64, # 128
-                                          max_dis=7,
-                                          expand_ratio=1)
-
+        self.value_encoder = ValueEncoder(self.value_dim, self.hidden_dim)
+        self.short_term_attn = LocalGatedPropagation(d_qk=64, d_vu=512 * 2, num_head=1, dropout=0, d_att=64, max_dis=7)
         self.decoder = Decoder(self.value_dim, self.hidden_dim)
 
-        if model_weights is not None:
-            self.load_weights(model_weights, init_as_zero_if_needed=True)
-
-    def encode_key(self, frame, need_sk=True, need_ek=True): 
+    def encode_key(self, frame, need_sk=True): 
         # Determine input shape
-        if len(frame.shape) == 5:
-            # shape is b*t*c*h*w
-            need_reshape = True
-            b, t = frame.shape[:2]
-            # flatten so that we can feed them into a 2D CNN
-            frame = frame.flatten(start_dim=0, end_dim=1)
-        elif len(frame.shape) == 4:
-            # shape is b*c*h*w
-            need_reshape = False
-        else:
-            raise NotImplementedError
-
+        # (Pdb) frame.shape -- [1, 3, 560, 896]
+        assert len(frame.shape) == 4
         f16, f8, f4 = self.key_encoder(frame)
-        key, shrinkage, selection = self.key_proj(f16, need_sk, need_ek)
-
-        if need_reshape:
-            # B*C*T*H*W
-            key = key.view(b, t, *key.shape[-3:]).transpose(1, 2).contiguous()
-            if shrinkage is not None:
-                shrinkage = shrinkage.view(b, t, *shrinkage.shape[-3:]).transpose(1, 2).contiguous()
-            if selection is not None:
-                selection = selection.view(b, t, *selection.shape[-3:]).transpose(1, 2).contiguous()
-
-            # B*T*C*H*W
-            f16 = f16.view(b, t, *f16.shape[-3:])
-            f8 = f8.view(b, t, *f8.shape[-3:])
-            f4 = f4.view(b, t, *f4.shape[-3:])
-
+        key, shrinkage, selection = self.key_proj(f16, need_sk)
         return key, shrinkage, selection, f16, f8, f4
 
-    def encode_value(self, frame, image_feat_f16, h16, masks, is_deep_update=True): 
+    def encode_value(self, frame, image_feat_f16, h16, masks): 
+        # tensor [masks] size: [1, 2, 560, 896], min: -0.476372, max: 0.657849, mean: 0.02309
         num_objects = masks.shape[1]
-        if num_objects != 1:
-            others = torch.cat([
-                torch.sum(
-                    masks[:, [j for j in range(num_objects) if i!=j]]
-                , dim=1, keepdim=True)
-            for i in range(num_objects)], 1)
-        else:
-            others = torch.zeros_like(masks)
+        assert num_objects == 2
 
-        g16, h16 = self.value_encoder(frame, image_feat_f16, h16, masks, others, is_deep_update)
+        others = torch.cat([torch.sum(masks[:, [j for j in range(num_objects) if i!=j]] , dim=1, keepdim=True)
+        for i in range(num_objects)], 1)
+        # tensor [others] size: [1, 2, 560, 896], min: -0.476372, max: 0.657849, mean: 0.02309
+
+        # s1 = torch.sum(masks[:, [1]], dim=1, keepdim=True)
+        # s0 = torch.sum(masks[:, [0]], dim=1, keepdim=True)
+        # others2 = torch.cat([s1, s0], 1)
+        # todos.debug.output_var("|others - others2|", (others - others2).abs())
+        g16, h16 = self.value_encoder(frame, image_feat_f16, h16, masks, others)
 
         return g16, h16
 
-    # Used in training only. 
-    # This step is replaced by MemoryManager in test time
-    def read_memory(self, query_key, query_selection, memory_key, 
-                    memory_shrinkage, memory_value):
-        """
-        query_key       : B * CK * H * W
-        query_selection : B * CK * H * W
-        memory_key      : B * CK * T * H * W
-        memory_shrinkage: B * 1  * T * H * W
-        memory_value    : B * num_objects * CV * T * H * W
-        """
-        batch_size, num_objects = memory_value.shape[:2]
-        memory_value = memory_value.flatten(start_dim=1, end_dim=2)
+    # # Used in training only. 
+    # # This step is replaced by MemoryManager in test time
+    # def read_memory(self, query_key, query_selection, memory_key, 
+    #                 memory_shrinkage, memory_value):
+    #     """
+    #     query_key       : B * CK * H * W
+    #     query_selection : B * CK * H * W
+    #     memory_key      : B * CK * T * H * W
+    #     memory_shrinkage: B * 1  * T * H * W
+    #     memory_value    : B * num_objects * CV * T * H * W
+    #     """
+    #     pdb.set_trace()
+    #     batch_size, num_objects = memory_value.shape[:2]
+    #     memory_value = memory_value.flatten(start_dim=1, end_dim=2)
 
-        affinity = get_affinity(memory_key, memory_shrinkage, query_key, query_selection)
-        memory = readout(affinity, memory_value)
-        memory = memory.view(batch_size, num_objects, self.value_dim, *memory.shape[-2:])
+    #     affinity = get_affinity(memory_key, memory_shrinkage, query_key, query_selection)
+    #     memory = readout(affinity, memory_value)
+    #     memory = memory.view(batch_size, num_objects, self.value_dim, *memory.shape[-2:])
 
-        return memory
+    #     return memory
 
-    def read_memory_short(self, query_key, memory_key, memory_value):
-        """
-        query_key       : B * CK * H * W
-        query_selection : B * CK * H * W
-        memory_key      : B * CK * T * H * W
-        memory_shrinkage: B * 1  * T * H * W
-        memory_value    : B * num_objects * CV * T * H * W
-        """
-        batch_size, num_objects = memory_value.shape[:2]
-        memory_value = memory_value.flatten(start_dim=1, end_dim=2)
+    # def read_memory_short(self, query_key, memory_key, memory_value):
+    #     """
+    #     query_key       : B * CK * H * W
+    #     query_selection : B * CK * H * W
+    #     memory_key      : B * CK * T * H * W
+    #     memory_shrinkage: B * 1  * T * H * W
+    #     memory_value    : B * num_objects * CV * T * H * W
+    #     """
+    #     pdb.set_trace()
+    #     batch_size, num_objects = memory_value.shape[:2]
+    #     memory_value = memory_value.flatten(start_dim=1, end_dim=2)
 
-        size_2d = query_key.shape[-2:]
-        memory_value_short, _ = self.short_term_attn(query_key, memory_key, memory_value, None, size_2d)
+    #     size_2d = query_key.shape[-2:]
+    #     memory_value_short = self.short_term_attn(query_key, memory_key, memory_value, size_2d)
 
-        memory_value_short = memory_value_short.permute(1, 2, 0).view(batch_size, num_objects, self.value_dim, *memory_value.shape[-2:])
+    #     memory_value_short = memory_value_short.permute(1, 2, 0).view(batch_size, num_objects, self.value_dim, *memory_value.shape[-2:])
 
-        return memory_value_short
+    #     return memory_value_short
     
-    def segment(self, multi_scale_features, memory_readout,
-                    hidden_state, selector=None, h_out=True, strip_bg=True): 
-
+    def segment(self, multi_scale_features, memory_readout, hidden_state, h_out=True):
+        # multi_scale_features is tuple: len = 3
+        #     tensor [item] size: [1, 1024, 35, 56], min: 0.0, max: 2.601784, mean: 0.063031
+        #     tensor [item] size: [1, 512, 70, 112], min: 0.0, max: 1.79675, mean: 0.090695
+        #     tensor [item] size: [1, 256, 140, 224], min: 0.0, max: 6.709424, mean: 0.200673
+        # tensor [memory_readout] size: [1, 2, 512, 35, 56], min: -9.328125, max: 4.738281, mean: -0.007783
+        # tensor [hidden_state] size: [1, 2, 64, 35, 56], min: -1.0, max: 0.999023, mean: -0.009137
+        # assert h_out == True
         hidden_state, logits = self.decoder(*multi_scale_features, hidden_state, memory_readout, h_out=h_out)
-        
-        prob = torch.tanh(logits)
-        logits = prob
+        logits = torch.tanh(logits)
 
-        return hidden_state, logits, prob
+        return hidden_state, logits
 
     def forward(self, mode, *args, **kwargs):
+        pdb.set_trace()
         if mode == 'encode_key':
             return self.encode_key(*args, **kwargs)
         elif mode == 'encode_value':
@@ -158,55 +128,6 @@ class ColorMNet(nn.Module):
         else:
             raise NotImplementedError
 
-    def init_hyperparameters(self, config, model_path=None, map_location=None):
-        """
-        Init three hyperparameters: key_dim, value_dim, and hidden_dim
-        If model_path is provided, we load these from the model weights
-        The actual parameters are then updated to the config in-place
-
-        Otherwise we load it either from the config or default
-        """
-        if model_path is not None:
-            # load the model and key/value/hidden dimensions with some hacks
-            # config is updated with the loaded parameters
-            model_weights = torch.load(model_path, map_location=map_location)
-            self.key_dim = model_weights['key_proj.key_proj.weight'].shape[0]
-            self.value_dim = model_weights['value_encoder.fuser.block2.conv2.weight'].shape[0]
-            self.disable_hidden = 'decoder.hidden_update.transform.weight' not in model_weights
-            if self.disable_hidden:
-                self.hidden_dim = 0
-            else:
-                self.hidden_dim = model_weights['decoder.hidden_update.transform.weight'].shape[0]//3
-            print(f'Hyperparameters read from the model weights: '
-                    f'C^k={self.key_dim}, C^v={self.value_dim}, C^h={self.hidden_dim}')
-        else:
-            model_weights = None
-            # load dimensions from config or default
-            if 'key_dim' not in config:
-                self.key_dim = 64
-                print(f'key_dim not found in config. Set to default {self.key_dim}')
-            else:
-                self.key_dim = config['key_dim']
-
-            if 'value_dim' not in config:
-                self.value_dim = 512
-                print(f'value_dim not found in config. Set to default {self.value_dim}')
-            else:
-                self.value_dim = config['value_dim']
-
-            if 'hidden_dim' not in config:
-                self.hidden_dim = 64
-                print(f'hidden_dim not found in config. Set to default {self.hidden_dim}')
-            else:
-                self.hidden_dim = config['hidden_dim']
-
-            self.disable_hidden = (self.hidden_dim <= 0)
-
-        config['key_dim'] = self.key_dim
-        config['value_dim'] = self.value_dim
-        config['hidden_dim'] = self.hidden_dim
-
-        return model_weights
 
     def load_weights(self, src_dict, init_as_zero_if_needed=False):
         # Maps SO weight (without other_mask) to MO weight (with other_mask)

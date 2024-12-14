@@ -17,6 +17,8 @@ warnings.filterwarnings("ignore")
 import torch.nn.functional as F
 
 from einops import rearrange
+import todos
+import pdb
 
 def load_weights_add_extra_dim(target, source_state, extra_dim=1):
     new_dict = OrderedDict()
@@ -54,7 +56,7 @@ class BasicBlock(nn.Module):
     expansion = 1
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, dilation=1):
-        super(BasicBlock, self).__init__()
+        super().__init__()
         self.conv1 = conv3x3(inplanes, planes, stride=stride, dilation=dilation)
         self.bn1 = nn.BatchNorm2d(planes)
         self.relu = nn.ReLU(inplace=True)
@@ -86,7 +88,7 @@ class Bottleneck(nn.Module):
     expansion = 4
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, dilation=1):
-        super(Bottleneck, self).__init__()
+        super().__init__()
         self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, dilation=dilation,
@@ -124,7 +126,10 @@ class Bottleneck(nn.Module):
 class ResNet(nn.Module):
     def __init__(self, block, layers=(3, 4, 23, 3), extra_dim=0):
         self.inplanes = 64
-        super(ResNet, self).__init__()
+        super().__init__()
+        # assert extra_dim == 0
+        # assert block == BasicBlock
+
         self.conv1 = nn.Conv2d(3+extra_dim, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
@@ -142,7 +147,9 @@ class ResNet(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
-    def _make_layer(self, block, planes, blocks, stride=1, dilation=1):
+    def _make_layer(self, block, planes, blocks, stride=1):
+        # assert block.expansion == 1
+
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
@@ -154,11 +161,11 @@ class ResNet(nn.Module):
         layers = [block(self.inplanes, planes, stride, downsample)]
         self.inplanes = planes * block.expansion
         for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes, dilation=dilation))
+            layers.append(block(self.inplanes, planes, dilation=1))
 
         return nn.Sequential(*layers)
 
-def resnet18(pretrained=True, extra_dim=0):
+def resnet18(pretrained=True, extra_dim=2):
     model = ResNet(BasicBlock, [2, 2, 2, 2], extra_dim)
     if pretrained:
         load_weights_add_extra_dim(model, model_zoo.load_url(model_urls['resnet18']), extra_dim)
@@ -193,42 +200,37 @@ dino_backbones = {
     },
 }
 
-class conv_head(nn.Module):
-    def __init__(self, embedding_size = 384, num_classes = 5):
-        super(conv_head, self).__init__()
-        self.segmentation_conv = nn.Sequential(
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(embedding_size, 64, (3,3), padding=(1,1)),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(64, num_classes, (3,3), padding=(1,1)),
-        )
-
-    def forward(self, x):
-        x = self.segmentation_conv(x)
-        x = torch.sigmoid(x)
-        return x
     
 class Segmentor(nn.Module):
     def __init__(self, num_classes=5, backbone = 'dinov2_s', head = 'conv', backbones = dino_backbones):
-        super(Segmentor, self).__init__()
-        self.heads = {
-            'conv':conv_head
-        }
+        super().__init__()
+        # self.heads = {
+        #     'conv':conv_head
+        # }
         # internet 
-        self.backbones = dino_backbones
-        self.backbone = load('facebookresearch/dinov2', self.backbones[backbone]['name']) # add trust_repo to
-        self.backbone.eval()
+        # self.backbones = dino_backbones
+        # self.backbone = load('facebookresearch/dinov2', self.backbones[backbone]['name']) # add trust_repo to
+        # self.backbone.eval()
 
         # # local 
-        # self.backbones = dino_backbones
-        # self.backbone = load('/root/.cache/torch/hub/facebookresearch_dinov2_main', self.backbones[backbone]['name'], source='local', pretrained=False) # add trust_repo to
-        # self.backbone.load_state_dict(torch.load('/root/.cache/torch/hub/checkpoints/dinov2_vits14_pretrain.pth'))
-        # self.backbone.eval()
+        # 'dinov2_s':{
+        #     'name':'dinov2_vits14',
+        #     'embedding_size':384,
+        #     'patch_size':14
+        # },        
+        self.backbones = dino_backbones
+        self.backbone = load('/home/dell/.cache/torch/hub/facebookresearch_dinov2_main', 
+                self.backbones[backbone]['name'], source='local', pretrained=False) # add trust_repo to
+        self.backbone.load_state_dict(torch.load('/home/dell/.cache/torch/hub/checkpoints/dinov2_vits14_pretrain.pth'))
+        self.backbone.eval()
 
         self.conv3 = nn.Conv2d(1536, 1536, kernel_size=1, bias=False)
         self.bn3 = nn.BatchNorm2d(1536)
         self.relu = nn.ReLU(inplace=True)
-                
+        # self.backbone -- DinoVisionTransformer()
+        # self.backbone.forward.__code__
+        #   -- <file "/home/dell/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/models/vision_transformer.py", line 324>
+
     def forward(self, x):
         with torch.no_grad():
             tokens = self.backbone.get_intermediate_layers(x, n=[8, 9, 10, 11], reshape=True) # last n=4 [8, 9, 10, 11]
@@ -243,6 +245,16 @@ class Segmentor(nn.Module):
             new_size = (int(old_size[0]*14/16), int(old_size[1]*14/16))
             f16 = F.interpolate(f16, size=new_size, mode='bilinear', align_corners=False) # scale_factor=3.5
 
+        # tensor [x] size: [1, 3, 560, 896], min: -0.994517, max: 1.0, mean: -0.189531
+        # tokens is tuple: len = 4
+        #     tensor [item] size: [1, 384, 40, 64], min: -64.093712, max: 65.633827, mean: 0.04372
+        #     tensor [item] size: [1, 384, 40, 64], min: -60.8563, max: 49.656631, mean: 0.003902
+        #     tensor [item] size: [1, 384, 40, 64], min: -46.128963, max: 40.135544, mean: 0.009809
+        #     tensor [item] size: [1, 384, 40, 64], min: -21.549391, max: 19.685974, mean: 0.007802
+        # tensor [f16] size: [1, 1536, 40, 64], min: -64.093712, max: 65.633827, mean: 0.016308
+
+        # tensor [f16] size: [1, 1536, 40, 64], min: 0.0, max: 10.96875, mean: 0.865237
+        # tensor [f16] size: [1, 1536, 35, 56], min: 0.0, max: 10.015625, mean: 0.865097
         return f16
 
 class LayerNormFunction(torch.autograd.Function):
@@ -275,7 +287,7 @@ class LayerNormFunction(torch.autograd.Function):
 class LayerNorm2d(nn.Module):
 
     def __init__(self, channels, eps=1e-6):
-        super(LayerNorm2d, self).__init__()
+        super().__init__()
         self.register_parameter('weight', nn.Parameter(torch.ones(channels)))
         self.register_parameter('bias', nn.Parameter(torch.zeros(channels)))
         self.eps = eps
@@ -332,45 +344,10 @@ class CrossChannelAttention(nn.Module):
 def normalize(in_channels):
     return torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
 
-@torch.jit.script
-def swish(x):
-    return x * torch.sigmoid(x)
-
-class ResBlock(nn.Module):
-    def __init__(self, in_channels, out_channels=None):
-        super(ResBlock, self).__init__()
-        self.in_channels = in_channels
-        self.out_channels = in_channels if out_channels is None else out_channels
-        self.norm1 = normalize(in_channels)
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
-        self.norm2 = normalize(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
-        if self.in_channels != self.out_channels:
-            self.conv_out = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
-
-    def forward(self, x_in):
-        x = x_in
-        x = self.norm1(x)
-        
-        x = swish(x)
-        # x = x * torch.sigmoid(x)
-
-        x = self.conv1(x)
-        x = self.norm2(x)
-
-        x = swish(x)
-        # x = x * torch.sigmoid(x)
-
-        x = self.conv2(x)
-        if self.in_channels != self.out_channels:
-            x_in = self.conv_out(x_in)
-
-        return x + x_in
-    
 class Fuse(nn.Module):
     def __init__(self, dine_feat, out_feat):
         # need to key same channel and HW for enc / dnc
-        super(Fuse, self).__init__()
+        super().__init__()
 
         self.encode_enc = nn.Conv2d(dine_feat, out_feat, kernel_size=3, stride=1, padding=1)
 

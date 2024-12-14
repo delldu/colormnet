@@ -95,16 +95,9 @@ class ColorMNetTrainer:
             loader = DataLoader(vid_reader, batch_size=1, shuffle=False, num_workers=2)
             vid_name = vid_reader.vid_name
             vid_length = len(loader)
-            # no need to count usage for LT if the video is not that long anyway
-            config['enable_long_term_count_usage'] = (
-                config['enable_long_term'] and
-                (vid_length
-                    / (config['max_mid_term_frames']-config['min_mid_term_frames'])
-                    * config['num_prototypes'])
-                >= config['max_long_term_elements']
-            )
 
-            mapper = MaskMapper()
+
+            # mapper = MaskMapper()
             processor = InferenceCore(self.model.module, config=config)
             first_mask_loaded = False
 
@@ -264,8 +257,8 @@ class ColorMNetTrainer:
 
                 # No need to encode the last frame
                 if ti < (self.num_frames-1):
-                    is_deep_update = np.random.rand() < self.deep_update_prob
-                    v16, hidden = self.model('encode_value', frames[:,ti], f16[:,ti], hidden, masks, is_deep_update=is_deep_update)
+                    # is_deep_update = np.random.rand() < self.deep_update_prob
+                    v16, hidden = self.model('encode_value', frames[:,ti], f16[:,ti], hidden, masks)
                     values = torch.cat([values, v16.unsqueeze(3)], 3)
 
                 out[f'masks_{ti}'] = masks

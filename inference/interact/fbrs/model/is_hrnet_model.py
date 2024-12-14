@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from .ops import DistMaps
 from .modeling.hrnet_ocr import HighResolutionNet
-
+import pdb
 
 def get_hrnet_model(width=48, ocr_width=256, small=False, norm_radius=260,
                     use_rgb_conv=True, with_aux_output=False, cpu_dist_maps=False,
@@ -39,6 +39,7 @@ class DistMapsHRNetModel(nn.Module):
 
         self.dist_maps = DistMaps(norm_radius=norm_radius, spatial_scale=1.0, cpu_mode=cpu_dist_maps)
         self.feature_extractor = feature_extractor
+        pdb.set_trace()
 
     def forward(self, image, points):
         coord_features = self.dist_maps(image, points)

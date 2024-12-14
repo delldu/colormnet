@@ -3,23 +3,20 @@ import warnings
 
 from inference.kv_memory_store import KeyValueMemoryStore
 from model.memory_util import *
-
+import pdb
 
 class MemoryManager:
     """
     Manages all three memory stores and the transition between working/long-term memory
     """
     def __init__(self, config):
-        self.hidden_dim = config['hidden_dim']
-        self.top_k = config['top_k']
+        self.hidden_dim = config['hidden_dim'] # 64
+        self.top_k = config['top_k'] # 30
 
-        self.enable_long_term = config['enable_long_term']
-        self.enable_long_term_usage = config['enable_long_term_count_usage']
-        if self.enable_long_term:
-            self.max_mt_frames = config['max_mid_term_frames']
-            self.min_mt_frames = config['min_mid_term_frames']
-            self.num_prototypes = config['num_prototypes']
-            self.max_long_elements = config['max_long_term_elements']
+        self.max_mt_frames = config['max_mid_term_frames'] # 10
+        self.min_mt_frames = config['min_mid_term_frames'] # 5
+        self.num_prototypes = config['num_prototypes'] # 128
+        self.max_long_elements = config['max_long_term_elements'] # 10000
 
         # dimensions will be inferred from input later
         self.CK = self.CV = None
@@ -29,26 +26,11 @@ class MemoryManager:
         # B x num_objects x CH x H x W
         self.hidden = None
 
-        self.work_mem = KeyValueMemoryStore(count_usage=self.enable_long_term)
-        if self.enable_long_term:
-            self.long_mem = KeyValueMemoryStore(count_usage=self.enable_long_term_usage)
-
+        self.work_mem = KeyValueMemoryStore(count_usage=True)
+        self.long_mem = KeyValueMemoryStore(count_usage=False)
         self.reset_config = True
 
-    def update_config(self, config):
-        self.reset_config = True
-        self.hidden_dim = config['hidden_dim']
-        self.top_k = config['top_k']
-
-        assert self.enable_long_term == config['enable_long_term'], 'cannot update this'
-        assert self.enable_long_term_usage == config['enable_long_term_count_usage'], 'cannot update this'
-
-        self.enable_long_term_usage = config['enable_long_term_count_usage']
-        if self.enable_long_term:
-            self.max_mt_frames = config['max_mid_term_frames']
-            self.min_mt_frames = config['min_mid_term_frames']
-            self.num_prototypes = config['num_prototypes']
-            self.max_long_elements = config['max_long_term_elements']
+        # pdb.set_trace()
 
     def _readout(self, affinity, v):
         # this function is for a single object group
@@ -57,7 +39,7 @@ class MemoryManager:
     def match_memory(self, query_key, selection):
         # query_key: B x C^k x H x W
         # selection:  B x C^k x H x W
-        num_groups = self.work_mem.num_groups
+        num_groups = self.work_mem.num_groups # === 0
         h, w = query_key.shape[-2:]
 
         query_key = query_key.flatten(start_dim=2)
@@ -66,8 +48,7 @@ class MemoryManager:
         """
         Memory readout using keys
         """
-
-        if self.enable_long_term and self.long_mem.engaged():
+        if self.long_mem.engaged():
             # Use long-term memory
             long_mem_size = self.long_mem.size
             memory_key = torch.cat([self.long_mem.key, self.work_mem.key], -1)
@@ -113,23 +94,20 @@ class MemoryManager:
             work_usage = usage[:, long_mem_size:]
             self.work_mem.update_usage(work_usage.flatten())
 
-            if self.enable_long_term_usage:
-                # ignore the index return for working memory
-                long_usage = usage[:, :long_mem_size]
-                self.long_mem.update_usage(long_usage.flatten())
+            # ignore the index return for working memory
+            long_usage = usage[:, :long_mem_size]
+            self.long_mem.update_usage(long_usage.flatten())
         else:
+            # ==> pdb.set_trace()
+
             # No long-term memory
             similarity = get_similarity(self.work_mem.key, self.work_mem.shrinkage, query_key, selection)
 
-            if self.enable_long_term:
-                affinity, usage = do_softmax(similarity, inplace=(num_groups==1), 
-                    top_k=self.top_k, return_usage=True)
+            affinity, usage = do_softmax(similarity, inplace=(num_groups==1), 
+                top_k=self.top_k, return_usage=True)
 
-                # Record memory usage for working memory
-                self.work_mem.update_usage(usage.flatten())
-            else:
-                affinity = do_softmax(similarity, inplace=(num_groups==1), 
-                    top_k=self.top_k, return_usage=False)
+            # Record memory usage for working memory
+            self.work_mem.update_usage(usage.flatten())
 
             affinity = [affinity]
             
@@ -157,10 +135,9 @@ class MemoryManager:
             self.reset_config = False
             self.H, self.W = key.shape[-2:]
             self.HW = self.H*self.W
-            if self.enable_long_term:
-                # convert from num. frames to num. nodes
-                self.min_work_elements = self.min_mt_frames*self.HW
-                self.max_work_elements = self.max_mt_frames*self.HW
+            # convert from num. frames to num. nodes
+            self.min_work_elements = self.min_mt_frames*self.HW
+            self.max_work_elements = self.max_mt_frames*self.HW
         
         # key:   1*C*N
         # value: num_objects*C*N
@@ -172,21 +149,18 @@ class MemoryManager:
         self.CV = value.shape[1]
 
         if selection is not None:
-            if not self.enable_long_term:
-                warnings.warn('the selection factor is only needed in long-term mode', UserWarning)
             selection = selection.flatten(start_dim=2)
 
         self.work_mem.add(key, value, shrinkage, selection, objects)
 
         # long-term memory cleanup
-        if self.enable_long_term:
-            # Do memory compressed if needed
-            if self.work_mem.size >= self.max_work_elements:
-                # Remove obsolete features if needed
-                if self.long_mem.size >= (self.max_long_elements-self.num_prototypes):
-                    self.long_mem.remove_obsolete_features(self.max_long_elements-self.num_prototypes)
-                    
-                self.compress_features()
+        # Do memory compressed if needed
+        if self.work_mem.size >= self.max_work_elements:
+            # Remove obsolete features if needed
+            if self.long_mem.size >= (self.max_long_elements-self.num_prototypes):
+                self.long_mem.remove_obsolete_features(self.max_long_elements-self.num_prototypes)
+                
+            self.compress_features()
 
 
     def create_hidden_state(self, n, sample_key):

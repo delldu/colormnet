@@ -13,6 +13,7 @@ import torch.nn.functional as F
 
 
 def interpolate_groups(g, ratio, mode, align_corners):
+    # assert len(g.shape) == 4
     if len(g.shape) == 4:
         g = F.interpolate(g, scale_factor=ratio, mode=mode, align_corners=align_corners)
     elif len(g.shape) == 5:
@@ -43,6 +44,7 @@ class GroupResBlock(nn.Module):
         if in_dim == out_dim:
             self.downsample = None
         else:
+            # xxxx_debug
             self.downsample = GConv2D(in_dim, out_dim, kernel_size=3, padding=1)
 
         self.conv1 = GConv2D(in_dim, out_dim, kernel_size=3, padding=1)
@@ -59,34 +61,18 @@ class GroupResBlock(nn.Module):
 
 
 class MainToGroupDistributor(nn.Module):
-    def __init__(self, x_transform=None, method='cat', reverse_order=False):
+    def __init__(self, method='cat'):
         super().__init__()
-
-        self.x_transform = x_transform
         self.method = method
-        self.reverse_order = reverse_order
 
     def forward(self, x, g):
         num_objects = g.shape[1]
 
-        while 0: print(num_objects, g.size())
-        # 3 torch.Size([8, 3, 2, 384, 384]) 
-
-        if self.x_transform is not None:
-            x = self.x_transform(x)
-
+        # xxxx_debug
         if self.method == 'cat':
-            if self.reverse_order:
-                g = torch.cat([g, x.unsqueeze(1).expand(-1,num_objects,-1,-1,-1)], 2)
-            else:
-                # print('2', g.size(), x.size(), x.unsqueeze(1).expand(-1,num_objects,-1,-1,-1).size()) 
-                # torch.Size([8, 2, 2, 224, 224]) torch.Size([8, 3, 224, 224]) torch.Size([8, 2, 3, 224, 224])
-                # torch.Size([1, 1, 2, 480, 864]) torch.Size([1, 3, 480, 864]) torch.Size([1, 1, 3, 480, 864])
-                g = torch.cat([x.unsqueeze(1).expand(-1,num_objects,-1,-1,-1), g], 2)
+            g = torch.cat([x.unsqueeze(1).expand(-1, num_objects, -1, -1, -1), g], 2)
         elif self.method == 'add':
-            # print(g.size(), x.size(), x.unsqueeze(1).expand(-1,num_objects,-1,-1,-1).size())
-            # torch.Size([8, 2, 512, 16, 16]) torch.Size([8, 512, 16, 16]) torch.Size([8, 2, 512, 16, 16])
-            g = x.unsqueeze(1).expand(-1,num_objects,-1,-1,-1) + g
+            g = x.unsqueeze(1).expand(-1, num_objects, -1, -1, -1) + g
         else:
             raise NotImplementedError
 
