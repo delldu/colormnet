@@ -226,8 +226,8 @@ class KeyProjection(nn.Module):
         # nn.init.orthogonal_(self.key_proj.weight.data)
         # nn.init.zeros_(self.key_proj.bias.data)
     
-    def forward(self, x, need_s):
-        shrinkage = self.d_proj(x)**2 + 1 if (need_s) else None
+    def forward(self, x):
+        shrinkage = self.d_proj(x)**2 + 1
         selection = torch.sigmoid(self.e_proj(x))
 
         return self.key_proj(x), shrinkage, selection

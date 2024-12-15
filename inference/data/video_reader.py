@@ -31,7 +31,7 @@ class VideoReader_221128_TransColorization(Dataset):
         self.to_save = to_save
 
         self.frames = [img for img in sorted(os.listdir(self.image_dir)) if (img.endswith('.jpg') or img.endswith('.png')) and not img.startswith('.')]
-        self.frames = self.frames[:16] # xxxx_debug
+        # self.frames = self.frames[:16] # xxxx_debug
 
         # self.palette = Image.open(path.join(mask_dir, sorted([msk for msk in os.listdir(mask_dir) if not msk.startswith('.')])[0])).getpalette()
         # self.suffix = self.first_gt_path.split('.')[-1]

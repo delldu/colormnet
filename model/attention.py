@@ -3,115 +3,101 @@ import torch.nn as nn
 import torch.nn.functional as F
 from model.basic import DWConv2d
 from spatial_correlation_sampler import SpatialCorrelationSampler
+import todos
 
 import pdb
 
-def linear_gate(x, dim=-1):
-    # return F.relu_(x).pow(2.) / x.size()[dim]
-    return torch.softmax(x, dim=dim)
-
 # LocalAttention -- LA
 class LocalGatedPropagation(nn.Module):
-    def __init__(self,
-                 d_qk,
-                 d_vu,
-                 num_head,
-                 dropout=0.,
-                 max_dis=7,
-                 d_att=64):
+    def __init__(self, d_qk = 64, d_vu = 1024, max_dis=7, d_att=64):
         super().__init__()
-        # d_qk=64, # 256
-        # d_vu=512 * 2,
-        # num_head=1,
-        # dropout=0,
-        # d_att=64, # 128
-        # max_dis=7,
-
-        # self.d_qk = d_qk
-        # self.d_vu = d_vu
         self.window_size = 2 * max_dis + 1
         assert self.window_size == 15
         self.max_dis = max_dis
         assert self.max_dis == 7
 
-        self.num_head = num_head
-        self.hidden_dim = d_vu // num_head
-
+        self.hidden_dim = d_vu
         self.d_att = d_att
         assert self.d_att == 64
-
         self.T = self.d_att**0.5
         assert self.T == 8
 
-        self.relative_emb_k = nn.Conv2d(self.d_att * self.num_head,
-                                        num_head * self.window_size * self.window_size,
-                                        kernel_size=1,
-                                        groups=num_head)
+        self.relative_emb_k = nn.Conv2d(self.d_att, self.window_size * self.window_size, kernel_size=1)
+        # self.relative_emb_k -- Conv2d(64, 225, kernel_size=(1, 1), stride=(1, 1))
 
         # xxxx_debug
         self.correlation_sampler = SpatialCorrelationSampler(
             kernel_size=1,
-            patch_size=self.window_size,
-            stride=1,
-            padding=0,
-            dilation=1,
-        dilation_patch=1)
+            patch_size=self.window_size, # 15
+            stride=1, padding=0, dilation=1, dilation_patch=1)
 
         self.dw_conv = DWConv2d(d_vu)
         self.projection = nn.Linear(d_vu, d_vu)
         # self.dropout = nn.Dropout(dropout)
 
         self.local_mask = None
-        self.last_size_2d = None
         self.qk_mask = None
 
-    def forward(self, q, k, v, size_2d):
+    def forward(self, q, k, v):
+        # tensor [q] size: [1, 64, 35, 56], min: -2.75, max: 3.162109, mean: -0.143807
+        # tensor [k] size: [1, 64, 35, 56], min: -2.755859, max: 3.140625, mean: -0.143588
+        # tensor [v] size: [1, 1024, 35, 56], min: -9.921875, max: 5.101562, mean: -0.014141
+        # --------------------------------------------------------------------------------
+        assert q.size()[2:] == k.size()[2:]
+        assert q.size()[2:] == v.size()[2:]
+
+        size_2d = q.shape[-2:]
         n, c, h, w = v.size()
 
-        if self.qk_mask is not None and (h, w) == self.last_size_2d:
+        if self.qk_mask is not None:
+            # self.qk_mask.size() -- [1, 1, 225, 1960]
+            # (h, w) -- (35, 56)
             qk_mask = self.qk_mask
         else:
+            # self.qk_mask === None
             memory_mask = torch.ones((1, 1, h, w), device=v.device).float()
-            unfolded_k_mask = self.pad_and_unfold(memory_mask).view(
-                1, 1, self.window_size * self.window_size, h * w)
-            qk_mask = 1 - unfolded_k_mask
+            unfolded_mask = self.pad_and_unfold(memory_mask).view(1, 1, self.window_size * self.window_size, h * w)
+            qk_mask = 1 - unfolded_mask
             self.qk_mask = qk_mask
 
         relative_emb = self.relative_emb_k(q)
+        relative_emb = relative_emb.view(n, 1, self.window_size * self.window_size, h * w)
 
         # Scale
         q = q / self.T
         q = q.view(-1, self.d_att, h, w)
         k = k.view(-1, self.d_att, h, w).contiguous()
-        v = v.view(-1, self.num_head, self.hidden_dim, h * w)
+        v = v.view(-1, 1, self.hidden_dim, h * w)
         
-        relative_emb = relative_emb.view(n, self.num_head, self.window_size * self.window_size, h * w)
-        qk = self.correlation_sampler(q, k).view(n, self.num_head, self.window_size * self.window_size, h * w)
+        # tensor [q] size: [1, 64, 35, 56], min: -0.342285, max: 0.398682, mean: -0.017892
+        # tensor [k] size: [1, 64, 35, 56], min: -2.755859, max: 3.140625, mean: -0.143588
+        # tensor [qk] size: [1, 15, 15, 35, 56], min: 0.0, max: 5.730469, mean: 3.024395
+        # --------------------------------------------------------------------------------
+        qk = self.correlation_sampler(q, k).view(n, 1, self.window_size * self.window_size, h * w)
+        # qk.size() -- [1, 1, 225, 1960], 1960 == 35 * 56
+
         qk = qk + relative_emb
-
-        # assert qk.dtype == torch.float32
-        qk -= qk_mask * 1e+8 if qk.dtype == torch.float32 else qk_mask * 1e+4
-
-        local_attn = linear_gate(qk, dim=2)
-        # local_attn = self.dropout(local_attn)
-
+        # tensor [qk_mask] size: [1, 1, 225, 1960], min: 0.0, max: 10000.0, mean: 1662.22229
+        local_attn = torch.softmax(qk, dim=2)
+        # tensor [local_attn] size: [1, 1, 225, 1960], min: 0.0, max: 0.519583, mean: 0.004444
         global_attn = self.local2global(local_attn, h, w)
-        agg_value = (global_attn @ v.transpose(-2, -1)).permute(2, 0, 1, 3).reshape(h * w, n, -1)
+        # tensor [global_attn] size: [1, 1, 1960, 1960], min: 0.0, max: 0.519583, mean: 0.00051
 
+        agg_value = (global_attn @ v.transpose(-2, -1)).permute(2, 0, 1, 3).reshape(h * w, n, -1)
         output = self.dw_conv(agg_value, size_2d)
         output = self.projection(output)
 
-        self.last_size_2d = (h, w)
+        # tensor [output] size: [1960, 1, 1024], min: -2.011719, max: 1.611328, mean: 0.004996
         return output
 
     def local2global(self, local_attn, height, width):
-        batch_size = local_attn.size()[0]
+        # tensor [local_attn] size: [1, 1, 225, 1960], min: 0.0, max: 0.519583, mean: 0.004444
+        B = local_attn.size()[0]
 
         pad_height = height + 2 * self.max_dis
         pad_width = width + 2 * self.max_dis
 
-        # assert self.local_mask == None
-        if self.local_mask is not None and (height, width) == self.last_size_2d:
+        if self.local_mask is not None:
             local_mask = self.local_mask
         else:
             ky, kx = torch.meshgrid([
@@ -127,16 +113,17 @@ class LocalGatedPropagation(nn.Module):
             offset_x = qx.reshape(-1, 1) - kx.reshape(1, -1) + self.max_dis
 
             local_mask = (offset_y.abs() <= self.max_dis) & (offset_x.abs() <= self.max_dis)
-            local_mask = local_mask.view(1, 1, height * width, pad_height, pad_width)
+            local_mask = local_mask.view(1, height * width, pad_height, pad_width)
             self.local_mask = local_mask
 
-        global_attn = torch.zeros((batch_size, self.num_head, height * width, pad_height, pad_width), 
-            device=local_attn.device)
-        global_attn[local_mask.expand(batch_size, self.num_head, -1, -1, -1)] = \
-                        local_attn.transpose(-1, -2).reshape(-1)
-        global_attn = global_attn[:, :, :, self.max_dis:-self.max_dis, self.max_dis:-self.max_dis].reshape(
-                        batch_size, self.num_head, height * width, height * width)
+        # tensor [local_mask] size: [1, 1960, 49, 70], min: 0.0, max: 1.0, mean: 0.065598
+        global_attn = torch.zeros((B, height * width, pad_height, pad_width), device=local_attn.device)
 
+        # local_mask.size() -- torch.Size([1, 1960, 49, 70])
+        global_attn[local_mask.expand(B, -1, -1, -1)] = local_attn.transpose(-1, -2).reshape(-1)
+        global_attn = global_attn[:, :, self.max_dis:-self.max_dis, self.max_dis:-self.max_dis].reshape(
+                        B, height * width, height * width)
+        # tensor [global_attn] size: [1, 1, 1960, 1960], min: 0.0, max: 0.519583, mean: 0.00051
         return global_attn
 
     def pad_and_unfold(self, x):

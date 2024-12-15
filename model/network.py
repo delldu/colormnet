@@ -32,15 +32,15 @@ class ColorMNet(nn.Module):
         self.key_proj = KeyProjection(1024, self.key_dim) # 1024 -> 384 -> 3072
 
         self.value_encoder = ValueEncoder(self.value_dim, self.hidden_dim)
-        self.short_term_attn = LocalGatedPropagation(d_qk=64, d_vu=512 * 2, num_head=1, dropout=0, d_att=64, max_dis=7)
+        self.short_term_attn = LocalGatedPropagation(d_qk=64, d_vu=512 * 2, d_att=64, max_dis=7)
         self.decoder = Decoder(self.value_dim, self.hidden_dim)
 
-    def encode_key(self, frame, need_sk=True): 
+    def encode_key(self, frame): 
         # Determine input shape
         # (Pdb) frame.shape -- [1, 3, 560, 896]
         assert len(frame.shape) == 4
         f16, f8, f4 = self.key_encoder(frame)
-        key, shrinkage, selection = self.key_proj(f16, need_sk)
+        key, shrinkage, selection = self.key_proj(f16)
         return key, shrinkage, selection, f16, f8, f4
 
     def encode_value(self, frame, image_feat_f16, h16, masks): 
@@ -107,7 +107,7 @@ class ColorMNet(nn.Module):
         #     tensor [item] size: [1, 256, 140, 224], min: 0.0, max: 6.709424, mean: 0.200673
         # tensor [memory_readout] size: [1, 2, 512, 35, 56], min: -9.328125, max: 4.738281, mean: -0.007783
         # tensor [hidden_state] size: [1, 2, 64, 35, 56], min: -1.0, max: 0.999023, mean: -0.009137
-        # assert h_out == True
+        assert h_out == True
         hidden_state, logits = self.decoder(*multi_scale_features, hidden_state, memory_readout, h_out=h_out)
         logits = torch.tanh(logits)
 

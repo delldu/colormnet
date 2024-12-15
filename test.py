@@ -57,6 +57,9 @@ def main():
     # dataset setting
     parser.add_argument('--d16_batch_path', default='input/blackswan')
     parser.add_argument('--ref_path', default='ref/blackswan')
+    # parser.add_argument('--d16_batch_path', default='input/v32')
+    # parser.add_argument('--ref_path', default='ref/v32')
+
     parser.add_argument('--output', default='result')
 
     # For generic (G) evaluation, point to a folder that contains "JPEGImages" and "Annotations"
@@ -93,7 +96,8 @@ def main():
         args.output = f'.output/{args.dataset}_{args.split}'
         print(f'Output path not provided. Defaulting to {args.output}')
 
-    meta_dataset = VideoReader_221128_TransColorization("blackswan", args.d16_batch_path, args.ref_path)
+    # meta_dataset = VideoReader_221128_TransColorization("blackswan", args.d16_batch_path, args.ref_path)
+    meta_dataset = VideoReader_221128_TransColorization("v32", args.d16_batch_path, args.ref_path)
     torch.autograd.set_grad_enabled(False)
 
     # Load our checkpoint
@@ -108,14 +112,6 @@ def main():
     loader = DataLoader(meta_dataset, batch_size=1, shuffle=False, num_workers=0)
     vid_name = "blackswan"
     vid_length = len(meta_dataset) #len(loader)
-    # no need to count usage for LT if the video is not that long anyway
-    config['enable_long_term_count_usage'] = (
-        config['enable_long_term'] and
-        (vid_length
-            / (config['max_mid_term_frames']-config['min_mid_term_frames'])
-            * config['num_prototypes'])
-        >= config['max_long_term_elements']
-    ) # False
 
     processor = InferenceCore(network, config=config)
     progress_bar = tqdm(total=vid_length)
@@ -131,12 +127,8 @@ def main():
             # tensor [msk] size: [1, 3, 480, 832], min: -0.996459, max: 0.998028, mean: -0.054033
 
             # data.get('mask').size() -- [1, 3, 480, 832]
-            if not config['FirstFrameIsNotExemplar']: # true
-                msk = msk[:,1:3,:,:] if msk is not None else None
-                # tensor [msk] size: [1, 2, 480, 832], min: -0.476372, max: 0.657849, mean: 0.02901
-            else:
-                # ==> pdb.set_trace()
-                pass
+            msk = msk[:,1:3,:,:] if msk is not None else None
+            # tensor [msk] size: [1, 2, 480, 832], min: -0.476372, max: 0.657849, mean: 0.02901
                 
             info = data['info']
             # {'frame': ['00000.png'], 'vid_name': ['blackswan'], 'save': tensor([True]), 
