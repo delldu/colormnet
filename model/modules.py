@@ -46,10 +46,9 @@ class FeatureFusionBlock(nn.Module):
 class HiddenUpdater(nn.Module):
     # Used in the decoder, multi-scale feature + GRU
     # # [512, 256, 256+1], 256, hidden_dim, 1
-    def __init__(self, g_dims, mid_dim, hidden_dim, ratio=1/2):
+    def __init__(self, g_dims, mid_dim, hidden_dim):
         super().__init__()
-        assert ratio == 1
-
+        assert hidden_dim == 64
         self.hidden_dim = hidden_dim
         self.g16_conv = GConv2D(g_dims[0], mid_dim, kernel_size=1)
         self.g8_conv = GConv2D(g_dims[1], mid_dim, kernel_size=1)
@@ -57,7 +56,6 @@ class HiddenUpdater(nn.Module):
 
         self.transform = GConv2D(mid_dim+hidden_dim, hidden_dim*3, kernel_size=3, padding=1)
 
-        nn.init.xavier_normal_(self.transform.weight)
 
     def forward(self, g, h):
         # h -- xxxx_gggg
@@ -104,7 +102,7 @@ class HiddenReinforcer(nn.Module):
         # namely the new value is generated before the forget gate.
         # might provide better gradient but frankly it was initially just an 
         # implementation error that I never bothered fixing
-        values = self.transform(g)
+        values = self.transform(g) # xxxx_gggg
         forget_gate = torch.sigmoid(values[:, :, :self.hidden_dim])
         update_gate = torch.sigmoid(values[:, :, self.hidden_dim:self.hidden_dim*2])
         new_value = torch.tanh(values[:, :, self.hidden_dim*2:])
@@ -265,7 +263,7 @@ class Decoder(nn.Module):
         assert hidden_dim == 64
 
         self.fuser = FeatureFusionBlock(1024, val_dim+hidden_dim, 512, 512) 
-        self.hidden_update = HiddenUpdater([512, 256, 256+1], 256, hidden_dim, 1) 
+        self.hidden_update = HiddenUpdater([512, 256, 256+1], 256, hidden_dim) 
         self.up_16_8 = UpsampleBlock(512, 512, 256) # 1/16 -> 1/8
         self.up_8_4 = UpsampleBlock(256, 256, 256) # 1/8 -> 1/4
         self.pred = nn.Conv2d(256, 1, kernel_size=3, padding=1, stride=1)

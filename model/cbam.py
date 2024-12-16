@@ -5,16 +5,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class BasicConv(nn.Module):
-    def __init__(self, in_planes, out_planes, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+    def __init__(self):
         super().__init__()
-        assert in_planes == 2
-        assert out_planes == 1
-        assert kernel_size == 7
-        assert stride == 1
-        assert padding == 3
-
-        self.out_channels = out_planes
-        self.conv = nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias)
+        self.conv = nn.Conv2d(2, 1, kernel_size=7, stride=1, padding=3, dilation=1, groups=1, bias=True)
 
     def forward(self, x):
         x = self.conv(x)
@@ -52,7 +45,7 @@ class ChannelGate(nn.Module):
             else:
                 channel_att_sum = channel_att_sum + channel_att_raw
 
-        scale = torch.sigmoid( channel_att_sum ).unsqueeze(2).unsqueeze(3).expand_as(x)
+        scale = torch.sigmoid(channel_att_sum).unsqueeze(2).unsqueeze(3).expand_as(x)
         return x * scale
 
 class ChannelPool(nn.Module):
@@ -64,7 +57,7 @@ class SpatialGate(nn.Module):
         super().__init__()
         kernel_size = 7
         self.compress = ChannelPool()
-        self.spatial = BasicConv(2, 1, kernel_size, stride=1, padding=(kernel_size-1) // 2)
+        self.spatial = BasicConv()
         
     def forward(self, x):
         x_compress = self.compress(x)

@@ -91,11 +91,6 @@ def main():
     config = vars(args)
     config['enable_long_term'] = not config['disable_long_term'] # True
 
-    if args.output is None:
-        pdb.set_trace()
-        args.output = f'.output/{args.dataset}_{args.split}'
-        print(f'Output path not provided. Defaulting to {args.output}')
-
     # meta_dataset = VideoReader_221128_TransColorization("blackswan", args.d16_batch_path, args.ref_path)
     meta_dataset = VideoReader_221128_TransColorization("v32", args.d16_batch_path, args.ref_path)
     torch.autograd.set_grad_enabled(False)
@@ -105,6 +100,8 @@ def main():
     # args.model -- 'saves/DINOv2FeatureV6_LocalAtten_s2_154000.pth'
     model_weights = torch.load(args.model)
     network.load_weights(model_weights, init_as_zero_if_needed=True)
+    # torch.save(network.state_dict(), "/tmp/video_color.pth")
+    
 
     total_process_time = 0
     total_frames = 0

@@ -9,7 +9,6 @@ It further depends on modules.py which gives more detailed implementations of su
 import torch
 import torch.nn as nn
 
-# from model.aggregate import aggregate
 from model.modules import *
 from model.memory_util import *
 
@@ -144,4 +143,4 @@ class ColorMNet(nn.Module):
                         print('Zero-initialized padding.')
                     src_dict[k] = torch.cat([src_dict[k], pads], 1)
 
-        self.load_state_dict(src_dict)
+        self.load_state_dict(src_dict, strict=False)

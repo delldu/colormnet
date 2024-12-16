@@ -16,6 +16,8 @@ import warnings
 warnings.filterwarnings("ignore")
 import torch.nn.functional as F
 
+from .dinov2 import vit_small
+
 from einops import rearrange
 import todos
 import pdb
@@ -177,32 +179,33 @@ def resnet50(pretrained=True, extra_dim=0):
         load_weights_add_extra_dim(model, model_zoo.load_url(model_urls['resnet50']), extra_dim)
     return model
 
-dino_backbones = {
-    'dinov2_s':{
-        'name':'dinov2_vits14',
-        'embedding_size':384,
-        'patch_size':14
-    },
-    'dinov2_b':{
-        'name':'dinov2_vitb14',
-        'embedding_size':768,
-        'patch_size':14
-    },
-    'dinov2_l':{
-        'name':'dinov2_vitl14',
-        'embedding_size':1024,
-        'patch_size':14
-    },
-    'dinov2_g':{
-        'name':'dinov2_vitg14',
-        'embedding_size':1536,
-        'patch_size':14
-    },
-}
+# dino_backbones = {
+#     'dinov2_s':{
+#         'name':'dinov2_vits14',
+#         'embedding_size':384,
+#         'patch_size':14
+#     },
+#     'dinov2_b':{
+#         'name':'dinov2_vitb14',
+#         'embedding_size':768,
+#         'patch_size':14
+#     },
+#     'dinov2_l':{
+#         'name':'dinov2_vitl14',
+#         'embedding_size':1024,
+#         'patch_size':14
+#     },
+#     'dinov2_g':{
+#         'name':'dinov2_vitg14',
+#         'embedding_size':1536,
+#         'patch_size':14
+#     },
+# }
 
     
 class Segmentor(nn.Module):
-    def __init__(self, num_classes=5, backbone = 'dinov2_s', head = 'conv', backbones = dino_backbones):
+    # def __init__(self, num_classes=5, backbone = 'dinov2_s', head = 'conv', backbones = dino_backbones):
+    def __init__(self):
         super().__init__()
         # self.heads = {
         #     'conv':conv_head
@@ -218,9 +221,14 @@ class Segmentor(nn.Module):
         #     'embedding_size':384,
         #     'patch_size':14
         # },        
-        self.backbones = dino_backbones
-        self.backbone = load('/home/dell/.cache/torch/hub/facebookresearch_dinov2_main', 
-                self.backbones[backbone]['name'], source='local', pretrained=False) # add trust_repo to
+        # self.backbones = dino_backbones
+        # self.backbone = load('/home/dell/.cache/torch/hub/facebookresearch_dinov2_main', 
+        #         self.backbones[backbone]['name'], source='local', pretrained=False) # add trust_repo to
+
+        # patch_size = 14
+        # num_register_tokens = 0
+        kwargs = {'img_size': 518, 'init_values': 1.0, 'ffn_layer': 'mlp', 'interpolate_offset': 0.1}
+        self.backbone = vit_small(patch_size = 14, **kwargs)
         self.backbone.load_state_dict(torch.load('/home/dell/.cache/torch/hub/checkpoints/dinov2_vits14_pretrain.pth'))
         self.backbone.eval()
 
@@ -230,10 +238,24 @@ class Segmentor(nn.Module):
         # self.backbone -- DinoVisionTransformer()
         # self.backbone.forward.__code__
         #   -- <file "/home/dell/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/models/vision_transformer.py", line 324>
+        # pdb.set_trace()
+        # self.backbone_8 = self.backbone.blocks[8]
+        # self.backbone_9 = self.backbone.blocks[9]
+        # self.backbone_10 = self.backbone.blocks[10]
+        # self.backbone_11 = self.backbone.blocks[11]
+        # # pdb.set_trace()
+
 
     def forward(self, x):
         with torch.no_grad():
             tokens = self.backbone.get_intermediate_layers(x, n=[8, 9, 10, 11], reshape=True) # last n=4 [8, 9, 10, 11]
+
+            # x = self.backbone_8(x)
+            # x = self.backbone_9(x)
+            # x = self.backbone_10(x)
+            # x = self.backbone_11(x)
+            # todos.debug.output_var("|x - tokens]", (x - tokens).abs())
+
 
             f16 = torch.cat(tokens, dim=1)
 

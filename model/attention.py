@@ -1,11 +1,31 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from model.basic import DWConv2d
 from spatial_correlation_sampler import SpatialCorrelationSampler
 import todos
 
 import pdb
+
+class DWConv2d(nn.Module):
+    def __init__(self, indim, dropout=0.1):
+        super().__init__()
+        self.conv = nn.Conv2d(indim,
+                              indim,
+                              5,
+                              dilation=1,
+                              padding=2,
+                              groups=indim,
+                              bias=False)
+        # self.dropout = nn.Dropout2d(p=dropout, inplace=True)
+
+    def forward(self, x, size_2d):
+        h, w = size_2d
+        _, bs, c = x.size()
+        x = x.view(h, w, bs, c).permute(2, 3, 0, 1)
+        x = self.conv(x)
+        # x = self.dropout(x)
+        x = x.view(bs, c, h * w).permute(2, 0, 1)
+        return x
 
 # LocalAttention -- LA
 class LocalGatedPropagation(nn.Module):
@@ -19,8 +39,6 @@ class LocalGatedPropagation(nn.Module):
         self.hidden_dim = d_vu
         self.d_att = d_att
         assert self.d_att == 64
-        self.T = self.d_att**0.5
-        assert self.T == 8
 
         self.relative_emb_k = nn.Conv2d(self.d_att, self.window_size * self.window_size, kernel_size=1)
         # self.relative_emb_k -- Conv2d(64, 225, kernel_size=(1, 1), stride=(1, 1))
@@ -44,37 +62,37 @@ class LocalGatedPropagation(nn.Module):
         # --------------------------------------------------------------------------------
         assert q.size()[2:] == k.size()[2:]
         assert q.size()[2:] == v.size()[2:]
-
-        size_2d = q.shape[-2:]
-        n, c, h, w = v.size()
+        B, C, H, W = v.size()
 
         relative_emb = self.relative_emb_k(q)
-        relative_emb = relative_emb.view(n, 1, self.window_size * self.window_size, h * w)
+        relative_emb = relative_emb.view(B, self.window_size * self.window_size, H * W)
 
         # Scale
-        q = q / self.T
-        assert q.size() == q.view(-1, self.d_att, h, w).size()
-        q = q.view(-1, self.d_att, h, w)
+        q = q / (self.d_att**0.5) # 8
+        assert q.size() == q.view(-1, self.d_att, H, W).size()
+        q = q.view(-1, self.d_att, H, W)
 
-        assert k.size() == k.view(-1, self.d_att, h, w).size()
-        k = k.view(-1, self.d_att, h, w).contiguous()
-        v = v.view(-1, 1, self.hidden_dim, h * w)
+        assert k.size() == k.view(-1, self.d_att, H, W).size()
+        k = k.view(-1, self.d_att, H, W).contiguous()
+        v = v.view(-1, 1, self.hidden_dim, H * W)
         
         # tensor [q] size: [1, 64, 35, 56], min: -0.342285, max: 0.398682, mean: -0.017892
         # tensor [k] size: [1, 64, 35, 56], min: -2.755859, max: 3.140625, mean: -0.143588
-        # tensor [qk] size: [1, 15, 15, 35, 56], min: 0.0, max: 5.730469, mean: 3.024395
+        # tensor [qk] size: [15, 15, 35, 56], min: 0.0, max: 5.730469, mean: 3.024395
         # --------------------------------------------------------------------------------
-        qk = self.correlation_sampler(q, k).view(n, 1, self.window_size * self.window_size, h * w)
-        # qk.size() -- [1, 1, 225, 1960], 1960 == 35 * 56
+        qk = self.correlation_sampler(q, k).view(B, self.window_size * self.window_size, H * W)
+        # qk.size() -- [1, 225, 1960], 1960 == 35 * 56
 
         qk = qk + relative_emb
-        local_attn = torch.softmax(qk, dim=2)
+        # local_attn = torch.softmax(qk, dim=2)
+        local_attn = torch.softmax(qk, dim=1)
+
         # tensor [local_attn] size: [1, 1, 225, 1960], min: 0.0, max: 0.519583, mean: 0.004444
-        global_attn = self.local2global(local_attn, h, w)
+        global_attn = self.local2global(local_attn, H, W)
         # tensor [global_attn] size: [1, 1, 1960, 1960], min: 0.0, max: 0.519583, mean: 0.00051
 
-        agg_value = (global_attn @ v.transpose(-2, -1)).permute(2, 0, 1, 3).reshape(h * w, n, -1)
-        output = self.dw_conv(agg_value, size_2d)
+        agg_value = (global_attn @ v.transpose(-2, -1)).permute(2, 0, 1, 3).reshape(H * W, B, -1)
+        output = self.dw_conv(agg_value, (H, W))
         output = self.projection(output)
 
         # tensor [output] size: [1960, 1, 1024], min: -2.011719, max: 1.611328, mean: 0.004996

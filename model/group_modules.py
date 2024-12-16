@@ -32,7 +32,7 @@ def downsample_groups(g, ratio=1/2, mode='area', align_corners=None):
     return interpolate_groups(g, ratio, mode, align_corners)
 
 
-class GConv2D(nn.Conv2d):
+class GConv2D(nn.Conv2d): # xxxx_gggg
     def forward(self, g):
         # tensor [g] size: [1, 2, 1280, 35, 56], min: 0.0, max: 13.382812, mean: 0.081629
         batch_size, num_objects = g.shape[:2]
