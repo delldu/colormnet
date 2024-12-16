@@ -36,7 +36,6 @@ class LocalGatedPropagation(nn.Module):
         # self.dropout = nn.Dropout(dropout)
 
         self.local_mask = None
-        self.qk_mask = None
 
     def forward(self, q, k, v):
         # tensor [q] size: [1, 64, 35, 56], min: -2.75, max: 3.162109, mean: -0.143807
@@ -49,23 +48,15 @@ class LocalGatedPropagation(nn.Module):
         size_2d = q.shape[-2:]
         n, c, h, w = v.size()
 
-        if self.qk_mask is not None:
-            # self.qk_mask.size() -- [1, 1, 225, 1960]
-            # (h, w) -- (35, 56)
-            qk_mask = self.qk_mask
-        else:
-            # self.qk_mask === None
-            memory_mask = torch.ones((1, 1, h, w), device=v.device).float()
-            unfolded_mask = self.pad_and_unfold(memory_mask).view(1, 1, self.window_size * self.window_size, h * w)
-            qk_mask = 1 - unfolded_mask
-            self.qk_mask = qk_mask
-
         relative_emb = self.relative_emb_k(q)
         relative_emb = relative_emb.view(n, 1, self.window_size * self.window_size, h * w)
 
         # Scale
         q = q / self.T
+        assert q.size() == q.view(-1, self.d_att, h, w).size()
         q = q.view(-1, self.d_att, h, w)
+
+        assert k.size() == k.view(-1, self.d_att, h, w).size()
         k = k.view(-1, self.d_att, h, w).contiguous()
         v = v.view(-1, 1, self.hidden_dim, h * w)
         
@@ -77,7 +68,6 @@ class LocalGatedPropagation(nn.Module):
         # qk.size() -- [1, 1, 225, 1960], 1960 == 35 * 56
 
         qk = qk + relative_emb
-        # tensor [qk_mask] size: [1, 1, 225, 1960], min: 0.0, max: 10000.0, mean: 1662.22229
         local_attn = torch.softmax(qk, dim=2)
         # tensor [local_attn] size: [1, 1, 225, 1960], min: 0.0, max: 0.519583, mean: 0.004444
         global_attn = self.local2global(local_attn, h, w)
@@ -104,33 +94,52 @@ class LocalGatedPropagation(nn.Module):
                 torch.arange(0, pad_height, device=local_attn.device),
                 torch.arange(0, pad_width, device=local_attn.device)
             ])
+            # tensor [ky] size: [49, 70], min: 0.0, max: 48.0, mean: 23.999998
+            # tensor [kx] size: [49, 70], min: 0.0, max: 69.0, mean: 34.5
+            # ky --
+            # tensor([[ 0,  0,  0,  ...,  0,  0,  0],
+            #         [ 1,  1,  1,  ...,  1,  1,  1],
+            #         [ 2,  2,  2,  ...,  2,  2,  2],
+            #         ...,
+            #         [46, 46, 46,  ..., 46, 46, 46],
+            #         [47, 47, 47,  ..., 47, 47, 47],
+            #         [48, 48, 48,  ..., 48, 48, 48]], device='cuda:0')
             qy, qx = torch.meshgrid([
                 torch.arange(0, height, device=local_attn.device),
                 torch.arange(0, width, device=local_attn.device)
             ])
+            # tensor [qy] size: [35, 56], min: 0.0, max: 34.0, mean: 17.0
+            # tensor [qx] size: [35, 56], min: 0.0, max: 55.0, mean: 27.499998
 
             offset_y = qy.reshape(-1, 1) - ky.reshape(1, -1) + self.max_dis
             offset_x = qx.reshape(-1, 1) - kx.reshape(1, -1) + self.max_dis
-
+            # tensor [offset_y] size: [1960, 3430], min: -41.0, max: 41.0, mean: 0.0
+            # tensor [offset_x] size: [1960, 3430], min: -62.0, max: 62.0, mean: 0.0
             local_mask = (offset_y.abs() <= self.max_dis) & (offset_x.abs() <= self.max_dis)
             local_mask = local_mask.view(1, height * width, pad_height, pad_width)
             self.local_mask = local_mask
 
         # tensor [local_mask] size: [1, 1960, 49, 70], min: 0.0, max: 1.0, mean: 0.065598
         global_attn = torch.zeros((B, height * width, pad_height, pad_width), device=local_attn.device)
+        # global_attn.size() -- [1, 1960, 49, 70]
 
         # local_mask.size() -- torch.Size([1, 1960, 49, 70])
+        # (Pdb) local_attn.size() -- [1, 1, 225, 1960]
+        # (Pdb) local_attn.transpose(-1, -2).size() -- [1, 1, 1960, 225]
+        # local_attn.transpose(-1, -2).reshape(-1).size() -- [441000]
+        # local_mask.expand(B, -1, -1, -1).size() -- [1, 1960, 49, 70]
+        # 1960*49*70 -- 6722800
         global_attn[local_mask.expand(B, -1, -1, -1)] = local_attn.transpose(-1, -2).reshape(-1)
-        global_attn = global_attn[:, :, self.max_dis:-self.max_dis, self.max_dis:-self.max_dis].reshape(
-                        B, height * width, height * width)
+        global_attn = global_attn[:, :, self.max_dis:-self.max_dis, self.max_dis:-self.max_dis].reshape(B, height * width, height * width)
         # tensor [global_attn] size: [1, 1, 1960, 1960], min: 0.0, max: 0.519583, mean: 0.00051
-        return global_attn
+        # ==>  # tensor [global_attn] size: [1, 1960, 1960], min: 0.0, max: 0.519583, mean: 0.000508
+        return global_attn #[1, 1960, 1960]
 
-    def pad_and_unfold(self, x):
-        pad_pixel = self.max_dis
-        x = F.pad(x, (pad_pixel, pad_pixel, pad_pixel, pad_pixel), mode='constant', value=0)
-        x = F.unfold(x,
-                     kernel_size=(self.window_size, self.window_size),
-                     stride=(1, 1),
-                     dilation=1)
-        return x
+    # def pad_and_unfold(self, x):
+    #     pad_pixel = self.max_dis
+    #     x = F.pad(x, (pad_pixel, pad_pixel, pad_pixel, pad_pixel), mode='constant', value=0)
+    #     x = F.unfold(x,
+    #                  kernel_size=(self.window_size, self.window_size),
+    #                  stride=(1, 1),
+    #                  dilation=1)
+    #     return x

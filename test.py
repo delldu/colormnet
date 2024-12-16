@@ -89,7 +89,7 @@ def main():
 
     args = parser.parse_args()
     config = vars(args)
-    config['enable_long_term'] = not config['disable_long_term']
+    config['enable_long_term'] = not config['disable_long_term'] # True
 
     if args.output is None:
         pdb.set_trace()

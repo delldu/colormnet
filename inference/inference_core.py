@@ -12,11 +12,11 @@ class InferenceCore:
         self.config = config
         self.network = network
         self.clear_memory()
+        
         self.all_labels = None
 
         self.last_ti_key = None
         self.last_ti_value = None
-        self.last_ti_hidden = None
 
     def clear_memory(self):
         self.memory = MemoryManager(config=self.config)
@@ -38,6 +38,15 @@ class InferenceCore:
         has_mask = (mask is not None)
 
         key, shrinkage, selection, f16, f8, f4 = self.network.encode_key(image)
+        # tensor [key] size: [1, 64, 35, 56], min: -2.763672, max: 3.185547, mean: -0.142968
+        # tensor [shrinkage] size: [1, 1, 35, 56], min: 15.297852, max: 43.097794, mean: 31.045326
+        # tensor [selection] size: [1, 64, 35, 56], min: 0.0, max: 0.937012, mean: 0.470785
+
+        # multi_scale_features ---
+        #   tensor [f16] size: [1, 1024, 35, 56], min: 0.0, max: 2.594945, mean: 0.063114
+        #   tensor [f8] size: [1, 512, 70, 112], min: 0.0, max: 1.842727, mean: 0.090533
+        #   tensor [f4] size: [1, 256, 140, 224], min: 0.0, max: 6.625021, mean: 0.200046
+
         multi_scale_features = (f16, f8, f4)
 
         if has_mask:
@@ -45,29 +54,21 @@ class InferenceCore:
             predict_ab = mask
 
             self.memory.create_hidden_state(2, key) # xxxx_debug
-
-            # todos.debug.output_var("key", key)
-            # todos.debug.output_var("hidden", self.memory.get_hidden())
-
-            value, hidden = self.network.encode_value(image, f16, self.memory.get_hidden(), predict_ab.unsqueeze(0))
-            # todos.debug.output_var("value", value)
-            # todos.debug.output_var("hidden", hidden)
-            # print("-" * 80)
-
             # tensor [key] size: [1, 64, 35, 56], min: -2.763672, max: 3.185547, mean: -0.142968
-            # tensor [hidden] size: [1, 2, 64, 35, 56], min: 0.0, max: 0.0, mean: 0.0
-            
+            # tensor [self.memory.get_hidden()] size: [1, 2, 64, 35, 56], min: 0.0, max: 0.0, mean: 0.0
+
+            # xxxx_gggg
+            value, hidden = self.network.encode_value(image, f16, self.memory.get_hidden(), predict_ab.unsqueeze(0))
             # tensor [value] size: [1, 2, 512, 35, 56], min: -9.9375, max: 5.132812, mean: -0.01333
             # tensor [hidden] size: [1, 2, 64, 35, 56], min: -1.0, max: 0.999023, mean: -0.009137
             # --------------------------------------------------------------------------------
 
-
+            # Save (key, shrinkage, selection), (value, hidden)
 
             self.memory.add_memory(key, shrinkage, value, self.all_labels, selection=selection)
 
             self.last_ti_key = key
             self.last_ti_value = value
-            self.last_ti_hidden = hidden
 
             self.memory.set_hidden(hidden)
 
@@ -85,7 +86,8 @@ class InferenceCore:
             # todos.debug.output_var("memory_value_short", memory_value_short)
             # todos.debug.output_var("memory_readout", memory_readout)
 
-            hidden, predict_ab = self.network.segment(multi_scale_features, memory_readout, 
+            # xxxx_gggg
+            hidden, predict_ab = self.network.decode_color(multi_scale_features, memory_readout, 
                                     self.memory.get_hidden(), h_out=not has_mask)
 
             # todos.debug.output_var("hidden", hidden)
@@ -101,7 +103,6 @@ class InferenceCore:
             # remove batch dim
             predict_ab = predict_ab[0]
 
-            self.last_ti_hidden = hidden
 
             self.memory.set_hidden(hidden)
                 

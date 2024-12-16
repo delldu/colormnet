@@ -56,7 +56,7 @@ class ColorMNet(nn.Module):
         # s0 = torch.sum(masks[:, [0]], dim=1, keepdim=True)
         # others2 = torch.cat([s1, s0], 1)
         # todos.debug.output_var("|others - others2|", (others - others2).abs())
-        g16, h16 = self.value_encoder(frame, image_feat_f16, h16, masks, others)
+        g16, h16 = self.value_encoder(frame, image_feat_f16, h16, masks, others) # xxxx_gggg
 
         return g16, h16
 
@@ -100,7 +100,7 @@ class ColorMNet(nn.Module):
 
     #     return memory_value_short
     
-    def segment(self, multi_scale_features, memory_readout, hidden_state, h_out=True):
+    def decode_color(self, multi_scale_features, memory_readout, hidden_state, h_out=True):
         # multi_scale_features is tuple: len = 3
         #     tensor [item] size: [1, 1024, 35, 56], min: 0.0, max: 2.601784, mean: 0.063031
         #     tensor [item] size: [1, 512, 70, 112], min: 0.0, max: 1.79675, mean: 0.090695
@@ -108,6 +108,7 @@ class ColorMNet(nn.Module):
         # tensor [memory_readout] size: [1, 2, 512, 35, 56], min: -9.328125, max: 4.738281, mean: -0.007783
         # tensor [hidden_state] size: [1, 2, 64, 35, 56], min: -1.0, max: 0.999023, mean: -0.009137
         assert h_out == True
+        # xxxx_gggg
         hidden_state, logits = self.decoder(*multi_scale_features, hidden_state, memory_readout, h_out=h_out)
         logits = torch.tanh(logits)
 

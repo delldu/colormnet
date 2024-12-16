@@ -1,5 +1,7 @@
 import torch
 from typing import List
+import todos
+import pdb
 
 class KeyValueMemoryStore:
     """
@@ -46,7 +48,11 @@ class KeyValueMemoryStore:
                 self.use_count = new_count
                 self.life_count = new_life
         else:
+            pdb.set_trace()
+            # (Pdb) self.key.size() -- [1, 64, 1960]
+            # (Pdb) key.size() -- [1, 64, 1960]
             self.k = torch.cat([self.k, key], -1)
+            # torch.cat([self.k, key], -1).size() -- [1, 64, 3920]
             if shrinkage is not None:
                 self.s = torch.cat([self.s, shrinkage], -1)
             if selection is not None:
@@ -62,8 +68,11 @@ class KeyValueMemoryStore:
             # First consume objects that are already in the memory bank
             # cannot use set here because we need to preserve order
             # shift by one as background is not part of value
-            remaining_objects = [obj-1 for obj in objects]
-            for gi, group in enumerate(self.obj_groups):
+            # objects === [1, 2], come from labels ...
+
+            remaining_objects = [obj-1 for obj in objects] # ==> [0, 1]
+            for gi, group in enumerate(self.obj_groups): # self.obj_groups === []
+                pdb.set_trace()
                 for obj in group:
                     # should properly raise an error if there are overlaps in obj_groups
                     remaining_objects.remove(obj)
@@ -71,13 +80,20 @@ class KeyValueMemoryStore:
 
             # If there are remaining objects, add them as a new group
             if len(remaining_objects) > 0:
-                new_group = list(remaining_objects)
+                new_group = list(remaining_objects) # === [0, 1]
+                # tensor [value] size: [2, 512, 1960], min: -9.921875, max: 5.101562, mean: -0.014141
                 self.v.append(value[new_group])
                 self.obj_groups.append(new_group)
                 self.all_objects.extend(new_group)
                 
                 assert sorted(self.all_objects) == self.all_objects, 'Objects MUST be inserted in sorted order '
+            # ------------------------------------------------------------------------------------------------------
+            # (Pdb) len(self.v) -- 1
+            # self.v[0].size() -- [2, 512, 1960]
+            # self.obj_groups -- [[0, 1]]
         else:
+            pdb.set_trace()
+
             # When objects is not given, v is a list that already has the object groups sorted
             # used in long-term memory
             assert isinstance(value, list)
@@ -103,6 +119,7 @@ class KeyValueMemoryStore:
         # i.e., concat (a[:start], a[end:])
         # min_size is only used for values, we do not sieve values under this size
         # (because they are not consolidated)
+        pdb.set_trace()
 
         if end == 0:
             # negative 0 would not work as the end index!

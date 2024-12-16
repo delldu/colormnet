@@ -11,9 +11,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import todos
+import pdb
 
 def interpolate_groups(g, ratio, mode, align_corners):
-    # assert len(g.shape) == 4
+    assert len(g.shape) == 5
     if len(g.shape) == 4:
         g = F.interpolate(g, scale_factor=ratio, mode=mode, align_corners=align_corners)
     elif len(g.shape) == 5:
@@ -32,8 +34,12 @@ def downsample_groups(g, ratio=1/2, mode='area', align_corners=None):
 
 class GConv2D(nn.Conv2d):
     def forward(self, g):
+        # tensor [g] size: [1, 2, 1280, 35, 56], min: 0.0, max: 13.382812, mean: 0.081629
         batch_size, num_objects = g.shape[:2]
+        # g.flatten(start_dim=0, end_dim=1).size() -- [2, 1280, 35, 56]
+
         g = super().forward(g.flatten(start_dim=0, end_dim=1))
+
         return g.view(batch_size, num_objects, *g.shape[1:])
 
 

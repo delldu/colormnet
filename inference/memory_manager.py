@@ -3,6 +3,8 @@ import warnings
 
 from inference.kv_memory_store import KeyValueMemoryStore
 from model.memory_util import *
+
+import todos
 import pdb
 
 class MemoryManager:
@@ -12,7 +14,6 @@ class MemoryManager:
     def __init__(self, config):
         self.hidden_dim = config['hidden_dim'] # 64
         self.top_k = config['top_k'] # 30
-
         self.max_mt_frames = config['max_mid_term_frames'] # 10
         self.min_mt_frames = config['min_mid_term_frames'] # 5
         self.num_prototypes = config['num_prototypes'] # 128
@@ -49,12 +50,21 @@ class MemoryManager:
         Memory readout using keys
         """
         if self.long_mem.engaged():
+            pdb.set_trace()
+            
             # Use long-term memory
             long_mem_size = self.long_mem.size
             memory_key = torch.cat([self.long_mem.key, self.work_mem.key], -1)
             shrinkage = torch.cat([self.long_mem.shrinkage, self.work_mem.shrinkage], -1) 
 
+            todos.debug.output_var("memory_key", memory_key)
+            todos.debug.output_var("shrinkage", shrinkage)
+            todos.debug.output_var("query_key", query_key)
+            todos.debug.output_var("selection", selection)
+
             similarity = get_similarity(memory_key, shrinkage, query_key, selection)
+            todos.debug.output_var("similarity", similarity)
+
             work_mem_similarity = similarity[:, long_mem_size:]
             long_mem_similarity = similarity[:, :long_mem_size]
 
@@ -62,21 +72,23 @@ class MemoryManager:
             # the first group always have all the keys valid
             affinity, usage = do_softmax(
                     torch.cat([long_mem_similarity[:, -self.long_mem.get_v_size(0):], work_mem_similarity], 1), 
-                    top_k=self.top_k, inplace=True, return_usage=True)
+                    top_k=self.top_k, return_usage=True)
+            todos.debug.output_var("affinity", affinity)
+
+
             affinity = [affinity]
 
             # compute affinity group by group as later groups only have a subset of keys
+            pdb.set_trace()
             for gi in range(1, num_groups):
                 if gi < self.long_mem.num_groups:
                     # merge working and lt similarities before softmax
                     affinity_one_group = do_softmax(
                         torch.cat([long_mem_similarity[:, -self.long_mem.get_v_size(gi):], 
-                                    work_mem_similarity[:, -self.work_mem.get_v_size(gi):]], 1), 
-                        top_k=self.top_k, inplace=True)
+                                    work_mem_similarity[:, -self.work_mem.get_v_size(gi):]], 1), top_k=self.top_k)
                 else:
                     # no long-term memory for this group
-                    affinity_one_group = do_softmax(work_mem_similarity[:, -self.work_mem.get_v_size(gi):], 
-                        top_k=self.top_k, inplace=(gi==num_groups-1))
+                    affinity_one_group = do_softmax(work_mem_similarity[:, -self.work_mem.get_v_size(gi):], top_k=self.top_k)
                 affinity.append(affinity_one_group)
 
             all_memory_value = []
@@ -99,38 +111,43 @@ class MemoryManager:
             self.long_mem.update_usage(long_usage.flatten())
         else:
             # ==> pdb.set_trace()
+            # tensor [self.work_mem.key] size: [1, 64, 1960], min: -2.755859, max: 3.140625, mean: -0.143588
+            # tensor [self.work_mem.shrinkage] size: [1, 1, 1960], min: 15.327408, max: 42.592422, mean: 31.011292
+            # tensor [query_key] size: [1, 64, 1960], min: -2.75, max: 3.162109, mean: -0.143807
+            # tensor [selection] size: [1, 64, 1960], min: 0.0, max: 0.9375, mean: 0.4714
 
             # No long-term memory
             similarity = get_similarity(self.work_mem.key, self.work_mem.shrinkage, query_key, selection)
+            # tensor [similarity] size: [1, 1960, 1960], min: -87.945297, max: 0.012002, mean: -21.991936
 
-            affinity, usage = do_softmax(similarity, inplace=(num_groups==1), 
-                top_k=self.top_k, return_usage=True)
+            affinity, usage = do_softmax(similarity, top_k=self.top_k, return_usage=True)
+            # tensor [affinity] size: [1, 1960, 1960], min: 0.0, max: 0.876976, mean: 0.00051
+            # usage.size() -- [1, 1960]
 
             # Record memory usage for working memory
             self.work_mem.update_usage(usage.flatten())
 
             affinity = [affinity]
-            
             # compute affinity group by group as later groups only have a subset of keys
-            for gi in range(1, num_groups):
-                affinity_one_group = do_softmax(similarity[:, -self.work_mem.get_v_size(gi):], 
-                    top_k=self.top_k, inplace=(gi==num_groups-1))
+            for gi in range(1, num_groups): # num_groups == 1
+                pdb.set_trace()
+                affinity_one_group = do_softmax(similarity[:, -self.work_mem.get_v_size(gi):], top_k=self.top_k)
                 affinity.append(affinity_one_group)
                 
             all_memory_value = self.work_mem.value
+            # len(self.work_mem.value) -- 1, self.work_mem.value[0].size() -- [2, 512, 1960]
 
         # Shared affinity within each group
-        all_readout_mem = torch.cat([
-            self._readout(affinity[gi], gv)
-            for gi, gv in enumerate(all_memory_value)
-        ], 0)
-
-        return all_readout_mem.view(all_readout_mem.shape[0], self.CV, h, w)
+        # affinity[0].size() -- [1, 1960, 1960]
+        all_readout_mem = torch.cat([self._readout(affinity[gi], gv) for gi, gv in enumerate(all_memory_value)], 0)
+        # tensor [all_readout_mem] size: [2, 512, 1960], min: -9.492188, max: 4.671875, mean: -0.013572
+        return all_readout_mem.view(all_readout_mem.shape[0], self.CV, h, w) # self.CV --- 512
 
     def add_memory(self, key, shrinkage, value, objects, selection=None):
         # key: 1*C*H*W
         # value: 1*num_objects*C*H*W
         # objects contain a list of object indices
+        # assert self.reset_config == True
         if self.H is None or self.reset_config:
             self.reset_config = False
             self.H, self.W = key.shape[-2:]
@@ -148,6 +165,7 @@ class MemoryManager:
         self.CK = key.shape[1]
         self.CV = value.shape[1]
 
+        assert selection is not None
         if selection is not None:
             selection = selection.flatten(start_dim=2)
 
@@ -156,6 +174,7 @@ class MemoryManager:
         # long-term memory cleanup
         # Do memory compressed if needed
         if self.work_mem.size >= self.max_work_elements:
+            pdb.set_trace()
             # Remove obsolete features if needed
             if self.long_mem.size >= (self.max_long_elements-self.num_prototypes):
                 self.long_mem.remove_obsolete_features(self.max_long_elements-self.num_prototypes)
@@ -166,9 +185,12 @@ class MemoryManager:
     def create_hidden_state(self, n, sample_key):
         # n is the TOTAL number of objects
         h, w = sample_key.shape[-2:]
+        assert self.hidden is None
+
         if self.hidden is None:
             self.hidden = torch.zeros((1, n, self.hidden_dim, h, w), device=sample_key.device)
         elif self.hidden.shape[1] != n:
+            pdb.set_trace()
             self.hidden = torch.cat([
                 self.hidden, 
                 torch.zeros((1, n-self.hidden.shape[1], self.hidden_dim, h, w), device=sample_key.device)
@@ -183,6 +205,7 @@ class MemoryManager:
         return self.hidden
 
     def compress_features(self):
+        pdb.set_trace()
         HW = self.HW
         candidate_value = []
         total_work_mem_size = self.work_mem.size
@@ -215,6 +238,7 @@ class MemoryManager:
         self.long_mem.add(prototype_key, prototype_value, prototype_shrinkage, selection=None, objects=None)
 
     def consolidation(self, candidate_key, candidate_shrinkage, candidate_selection, usage, candidate_value):
+        pdb.set_trace()
         # keys: 1*C*N
         # values: num_objects*C*N
         N = candidate_key.shape[-1]
