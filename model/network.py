@@ -53,8 +53,11 @@ class ColorMNet(nn.Module):
 
         # s1 = torch.sum(masks[:, [1]], dim=1, keepdim=True)
         # s0 = torch.sum(masks[:, [0]], dim=1, keepdim=True)
-        # others2 = torch.cat([s1, s0], 1)
+        # s1 = masks[:, 1:2, :, :]
+        # s0 = masks[:, 0:1, :, :]
+        # others2 = torch.cat([s1, s0], dim=1)
         # todos.debug.output_var("|others - others2|", (others - others2).abs())
+
         g16, h16 = self.value_encoder(frame, image_feat_f16, h16, masks, others) # xxxx_gggg
 
         return g16, h16

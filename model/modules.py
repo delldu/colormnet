@@ -31,12 +31,21 @@ class FeatureFusionBlock(nn.Module):
         self.block2 = GroupResBlock(g_mid_dim, g_out_dim)
 
     def forward(self, x, g):
+        # tensor [x] size: [1, 1024, 35, 56], min: 0.0, max: 2.594465, mean: 0.063098
+        # tensor [g] size: [1, 2, 256, 35, 56], min: 0.0, max: 13.382812, mean: 0.155741
+
         batch_size, num_objects = g.shape[:2]
 
         g = self.distributor(x, g)
+        # tensor [g] size: [1, 2, 1280, 35, 56], min: 0.0, max: 13.382812, mean: 0.081627
+
+
         g = self.block1(g) # xxxx_3333
+        # tensor [g] size: [1, 2, 512, 35, 56], min: -7.238281, max: 4.285156, mean: -0.079542
+
         r = self.attention(g.flatten(start_dim=0, end_dim=1))
         r = r.view(batch_size, num_objects, *r.shape[1:])
+        # tensor [r] size: [1, 2, 512, 35, 56], min: -2.767578, max: 1.058594, mean: -0.012097
 
         g = self.block2(g+r)
 

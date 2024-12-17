@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .dinov2 import DinoVisionTransformer
 
 from einops import rearrange
 import todos
@@ -108,6 +107,7 @@ class ResNet(nn.Module):
 
     def _make_layer(self, block, planes, blocks, stride=1):
         # assert block.expansion == 1
+        # assert block == BasicBlock
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
@@ -130,37 +130,6 @@ def resnet50():
     model = ResNet(Bottleneck, [3, 4, 6, 3], extra_dim=0)
     return model
 
-class Segmentor(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.backbone = DinoVisionTransformer()
-        self.conv3 = nn.Conv2d(1536, 1536, kernel_size=1, bias=False) # 1536 === 384 * 4
-        self.bn3 = nn.BatchNorm2d(1536)
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, x):
-        tokens = self.backbone(x) # .get_intermediate_layers(x, n=[8, 9, 10, 11], reshape=True) # last n=4 [8, 9, 10, 11]
-        f16 = torch.cat(tokens, dim=1)
-
-        f16 = self.conv3(f16)
-        f16 = self.bn3(f16)
-        f16 = self.relu(f16)
-
-        old_size = (f16.shape[2], f16.shape[3])
-        new_size = (int(old_size[0]*14/16), int(old_size[1]*14/16))
-        f16 = F.interpolate(f16, size=new_size, mode='bilinear', align_corners=False) # scale_factor=3.5
-
-        # tensor [x] size: [1, 3, 560, 896], min: -0.994517, max: 1.0, mean: -0.189531
-        # tokens is tuple: len = 4
-        #     tensor [item] size: [1, 384, 40, 64], min: -64.093712, max: 65.633827, mean: 0.04372
-        #     tensor [item] size: [1, 384, 40, 64], min: -60.8563, max: 49.656631, mean: 0.003902
-        #     tensor [item] size: [1, 384, 40, 64], min: -46.128963, max: 40.135544, mean: 0.009809
-        #     tensor [item] size: [1, 384, 40, 64], min: -21.549391, max: 19.685974, mean: 0.007802
-        # tensor [f16] size: [1, 1536, 40, 64], min: -64.093712, max: 65.633827, mean: 0.016308
-
-        # tensor [f16] size: [1, 1536, 40, 64], min: 0.0, max: 10.96875, mean: 0.865237
-        # tensor [f16] size: [1, 1536, 35, 56], min: 0.0, max: 10.015625, mean: 0.865097
-        return f16
 
 class LayerNormFunction(torch.autograd.Function):
     @staticmethod

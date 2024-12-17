@@ -12,6 +12,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import pdb
 
 class PatchEmbed(nn.Module):
@@ -156,37 +157,8 @@ class DinoVisionTransformer(nn.Module):
         num_heads=6,
     ):
         super().__init__()
-        # self = DinoVisionTransformer(
-        #   (patch_embed): PatchEmbed(
-        #     (proj): Conv2d(3, 384, kernel_size=(14, 14), stride=(14, 14))
-        #     (norm): Identity()
-        #   )
-        #   (blocks): ModuleList(
-        #     (0-11): 12 x Block(
-        #       (norm1): LayerNorm((384,), eps=1e-06, elementwise_affine=True)
-        #       (attn): MemEffAttention(
-        #         (qkv): Linear(in_features=384, out_features=1152, bias=True)
-        #         (proj): Linear(in_features=384, out_features=384, bias=True)
-        #       )
-        #       (ls1): LayerScale()
-        #       (drop_path1): Identity()
-        #       (norm2): LayerNorm((384,), eps=1e-06, elementwise_affine=True)
-        #       (mlp): Mlp(
-        #         (fc1): Linear(in_features=384, out_features=1536, bias=True)
-        #         (act): GELU(approximate='none')
-        #         (fc2): Linear(in_features=1536, out_features=384, bias=True)
-        #       )
-        #       (ls2): LayerScale()
-        #     )
-        #   )
-        #   (norm): LayerNorm((384,), eps=1e-06, elementwise_affine=True)
-        #   (head): Identity()
-        # )
-
-        # self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
         self.num_tokens = 1
         self.patch_size = patch_size
-        self.interpolate_offset = 0.1
 
         self.patch_embed = PatchEmbed(img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
         num_patches = self.patch_embed.num_patches # 1369
@@ -195,15 +167,7 @@ class DinoVisionTransformer(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + self.num_tokens, embed_dim))
         # self.pos_embed.size() -- [1, 1370, 384]
 
-        blocks_list = [
-            NestedTensorBlock(
-                dim=embed_dim,
-                num_heads=num_heads,
-            )
-            for i in range(depth)
-        ]
-        # xxxx_1111
-        self.chunked_blocks = False
+        blocks_list = [ NestedTensorBlock(dim=embed_dim, num_heads=num_heads) for i in range(depth) ]
         self.blocks = nn.ModuleList(blocks_list)
         self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
         self.mask_token = nn.Parameter(torch.zeros(1, embed_dim))
@@ -227,18 +191,16 @@ class DinoVisionTransformer(nn.Module):
         h0 = h // self.patch_size
         M = int(math.sqrt(N))  # Recover the number of patches in each dimension
         assert N == M * M
-        kwargs = {}
         # Historical kludge: add a small number to avoid floating point error in the interpolation, see https://github.com/facebookresearch/dino/issues/8
         # Note: still needed for backward-compatibility, the underlying operators are using both output size and scale factors
-        sx = float(w0 + self.interpolate_offset) / M
-        sy = float(h0 + self.interpolate_offset) / M
-        kwargs["scale_factor"] = (sx, sy)
+        sx = float(w0 + 0.1) / M
+        sy = float(h0 + 0.1) / M
 
-        patch_pos_embed = nn.functional.interpolate(
+        patch_pos_embed = F.interpolate(
             patch_pos_embed.reshape(1, M, M, dim).permute(0, 3, 1, 2),
             mode="bicubic",
             antialias=False,
-            **kwargs,
+            scale_factor=(sx, sy)
         )
         assert (w0, h0) == patch_pos_embed.shape[-2:]
         patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
@@ -265,21 +227,16 @@ class DinoVisionTransformer(nn.Module):
         return output
 
 
-    def get_intermediate_layers(self,
-        x,
-        n = 1,  # Layers or n last layers to take
-        reshape = True,
-    ):
+    def get_intermediate_layers(self, x, n = 1):
         # n = [8, 9, 10, 11]
         # reshape = True
         # norm = True
-        assert self.chunked_blocks == False
+        # assert self.chunked_blocks == False
         outputs = self._get_intermediate_layers_not_chunked(x, n)
         outputs = [self.norm(out) for out in outputs]
         class_tokens = [out[:, 0] for out in outputs]
         outputs = [out[:, 1:] for out in outputs]
 
-        # reshape: # True, xxxx_1111
         B, _, w, h = x.shape
         outputs = [
             out.reshape(B, w // self.patch_size, h // self.patch_size, -1).permute(0, 3, 1, 2).contiguous()

@@ -47,17 +47,18 @@ def test_color_model(model, device):
     image = torch.randn(1, 3, 560, 896).to(device)
     B, C, H, W = image.size()
 
-    color = torch.randn(B, 2, H, W).to(device)
+    color_ab = torch.randn(B, 2, H, W).to(device)
     hidden_state = torch.randn(2, 64, H//16, W//16).to(device)
 
     key, shrinkage, selection, f16, f8, f4 = model.encode_key(image)
 
-    # todos.debug.output_var("key", key)
-    # todos.debug.output_var("shrinkage", shrinkage)
-    # todos.debug.output_var("selection", selection)
-    # todos.debug.output_var("f16", f16)
-    # todos.debug.output_var("f8", f8)
-    # todos.debug.output_var("f4", f4)
+    todos.debug.output_var("key", key)
+    todos.debug.output_var("shrinkage", shrinkage)
+    todos.debug.output_var("selection", selection)
+    todos.debug.output_var("f16", f16)
+    todos.debug.output_var("f8", f8)
+    todos.debug.output_var("f4", f4)
+    print("-" * 80)
     # tensor [key] size: [1, 64, 35, 56], min: -2.006974, max: 2.265148, mean: -0.119895
     # tensor [shrinkage] size: [1, 1, 35, 56], min: 19.956394, max: 43.019291, mean: 37.951973
     # tensor [selection] size: [1, 64, 35, 56], min: 0.0, max: 0.93948, mean: 0.570642
@@ -65,19 +66,19 @@ def test_color_model(model, device):
     # tensor [f8] size: [1, 512, 70, 112], min: 0.0, max: 1.421202, mean: 0.09145
     # tensor [f4] size: [1, 256, 140, 224], min: 0.0, max: 5.96357, mean: 0.215469
 
-    # tensor [self.memory.get_hidden()] size: [1, 2, 64, 35, 56], min: 0.0, max: 0.0, mean: 0.0
+    value, hidden = model.encode_value(image, f16, hidden_state, color_ab)
+    todos.debug.output_var("value", value)
+    todos.debug.output_var("hidden", hidden)
+    print("-" * 80)
 
-    # value, hidden = model.encode_value(image, f16, hidden_state, color)
-    # todos.debug.output_var("value", value)
-    # todos.debug.output_var("hidden", hidden)
-    # # tensor [value] size: [2, 512, 35, 56], min: -31.887749, max: 15.17862, mean: -0.761654
-    # # tensor [hidden] size: [2, 64, 35, 56], min: -3.855072, max: 4.748185, mean: 0.110133
+    # tensor [value] size: [2, 512, 35, 56], min: -31.887749, max: 15.17862, mean: -0.761654
+    # tensor [hidden] size: [2, 64, 35, 56], min: -3.855072, max: 4.748185, mean: 0.110133
 
-    # multi_scale_features = (f16, f8, f4)
-    # hidden, predict = model.decode_color(multi_scale_features, value, hidden)
-    # todos.debug.output_var("hidden", hidden)
-    # todos.debug.output_var("predict", predict)
-
+    multi_scale_features = (f16, f8, f4)
+    hidden, predict = model.decode_color(multi_scale_features, value, hidden)
+    todos.debug.output_var("hidden", hidden)
+    todos.debug.output_var("predict", predict)
+    print("-" * 80)
 
     # tensor [key] size: [1, 64, 35, 56], min: -2.75, max: 3.166016, mean: -0.143513
     # tensor [self.last_ti_key] size: [1, 64, 35, 56], min: -2.753906, max: 3.142578, mean: -0.143365
@@ -85,11 +86,9 @@ def test_color_model(model, device):
     key = torch.randn(1, 64, 35, 56).to(device)
     key2 = torch.randn(1, 64, 35, 56).to(device)
     val2 = torch.randn(1, 1024, 35, 56).to(device)
-    value_short = model.short_term_attn(key, key2, val2)
-    todos.debug.output_var("value_short", value_short)
-    # tensor [value_short] size: [1960, 1, 1024], min: -0.21165, max: 0.222777, mean: 0.001241
-
-    # tensor [memory_value_short] size: [1960, 1, 1024], min: -2.007812, max: 1.608398, mean: 0.005006
+    local_value = model.short_term_attn(key, key2, val2)
+    todos.debug.output_var("local_value", local_value)
+    # tensor [local_value] size: [1960, 1, 1024], min: -0.21165, max: 0.222777, mean: 0.001241
 
 
 def video_predict(input_file, color_file, output_file):
@@ -106,7 +105,7 @@ def video_predict(input_file, color_file, output_file):
     # load model
     model, device = get_color_model()
 
-    return test_color_model(model, device)
+    # return test_color_model(model, device)
 
     # Reference
     reference_tensor = todos.data.load_tensor(color_file)

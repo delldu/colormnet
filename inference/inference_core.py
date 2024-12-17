@@ -79,7 +79,12 @@ class InferenceCore:
             # short term memory 
             batch, num_objects, value_dim, h, w = self.last_ti_value.shape
             last_ti_value = self.last_ti_value.flatten(start_dim=1, end_dim=2)
+            # tensor [key] size: [1, 64, 35, 56], min: -2.75, max: 3.166016, mean: -0.143513
+            # tensor [self.last_ti_key] size: [1, 64, 35, 56], min: -2.753906, max: 3.142578, mean: -0.143365
+            # tensor [last_ti_value] size: [1, 1024, 35, 56], min: -9.9375, max: 5.101562, mean: -0.014165
             memory_value_short = self.network.short_term_attn(key, self.last_ti_key, last_ti_value)
+            # tensor [memory_value_short] size: [1960, 1, 1024], min: -2.007812, max: 1.608398, mean: 0.005006
+
             memory_value_short = memory_value_short.permute(1, 2, 0).view(batch, num_objects, value_dim, h, w)
             memory_readout += memory_value_short
 

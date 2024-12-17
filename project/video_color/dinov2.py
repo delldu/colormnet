@@ -146,7 +146,7 @@ class NestedTensorBlock(nn.Module):
         return x
 
 class DinoVisionTransformer(nn.Module):
-    '''Small'''
+    '''Small dino v2'''
     def __init__(
         self,
         img_size=518,
