@@ -117,7 +117,7 @@ class ValueEncoder(nn.Module):
         super().__init__()
         assert value_dim == 512
 
-        network = resnet.resnet18(pretrained=True, extra_dim=2)
+        network = resnet.resnet18()
         self.conv1 = network.conv1
         self.bn1 = network.bn1
         self.relu = network.relu  # 1/2, 64
@@ -166,7 +166,7 @@ class ValueEncoder(nn.Module):
 class KeyEncoder_DINOv2_v6(nn.Module):
     def __init__(self):
         super().__init__()
-        network = resnet.resnet50(pretrained=True)
+        network = resnet.resnet50()
         self.conv1 = network.conv1
         self.bn1 = network.bn1
         self.relu = network.relu  # 1/2, 64

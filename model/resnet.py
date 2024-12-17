@@ -2,46 +2,16 @@
 resnet.py - A modified ResNet structure
 We append extra channels to the first conv by some network surgery
 """
-
-from collections import OrderedDict
 import math
-
 import torch
 import torch.nn as nn
-from torch.utils import model_zoo
-
-from torch.hub import load
-import torchvision.models as models
-import warnings
-warnings.filterwarnings("ignore")
 import torch.nn.functional as F
 
-from .dinov2 import vit_small
+from .dinov2 import DinoVisionTransformer
 
 from einops import rearrange
 import todos
 import pdb
-
-def load_weights_add_extra_dim(target, source_state, extra_dim=1):
-    new_dict = OrderedDict()
-
-    for k1, v1 in target.state_dict().items():
-        if not 'num_batches_tracked' in k1:
-            if k1 in source_state:
-                tar_v = source_state[k1]
-
-                if v1.shape != tar_v.shape:
-                    # Init the new segmentation channel with zeros
-                    # print(v1.shape, tar_v.shape)
-                    c, _, w, h = v1.shape
-                    pads = torch.zeros((c,extra_dim,w,h), device=tar_v.device)
-                    nn.init.orthogonal_(pads)
-                    tar_v = torch.cat([tar_v, pads], 1)
-
-                new_dict[k1] = tar_v
-
-    target.load_state_dict(new_dict)
-
 
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
@@ -167,16 +137,12 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-def resnet18(pretrained=True, extra_dim=2):
-    model = ResNet(BasicBlock, [2, 2, 2, 2], extra_dim)
-    if pretrained:
-        load_weights_add_extra_dim(model, model_zoo.load_url(model_urls['resnet18']), extra_dim)
+def resnet18():
+    model = ResNet(BasicBlock, [2, 2, 2, 2], extra_dim=2)
     return model
 
-def resnet50(pretrained=True, extra_dim=0):
-    model = ResNet(Bottleneck, [3, 4, 6, 3], extra_dim)
-    if pretrained:
-        load_weights_add_extra_dim(model, model_zoo.load_url(model_urls['resnet50']), extra_dim)
+def resnet50():
+    model = ResNet(Bottleneck, [3, 4, 6, 3], extra_dim=0)
     return model
 
 # dino_backbones = {
@@ -204,33 +170,11 @@ def resnet50(pretrained=True, extra_dim=0):
 
     
 class Segmentor(nn.Module):
-    # def __init__(self, num_classes=5, backbone = 'dinov2_s', head = 'conv', backbones = dino_backbones):
     def __init__(self):
         super().__init__()
-        # self.heads = {
-        #     'conv':conv_head
-        # }
-        # internet 
-        # self.backbones = dino_backbones
-        # self.backbone = load('facebookresearch/dinov2', self.backbones[backbone]['name']) # add trust_repo to
+        self.backbone = DinoVisionTransformer()
+        # self.backbone.load_state_dict(torch.load('/home/dell/.cache/torch/hub/checkpoints/dinov2_vits14_pretrain.pth'))
         # self.backbone.eval()
-
-        # # local 
-        # 'dinov2_s':{
-        #     'name':'dinov2_vits14',
-        #     'embedding_size':384,
-        #     'patch_size':14
-        # },        
-        # self.backbones = dino_backbones
-        # self.backbone = load('/home/dell/.cache/torch/hub/facebookresearch_dinov2_main', 
-        #         self.backbones[backbone]['name'], source='local', pretrained=False) # add trust_repo to
-
-        # patch_size = 14
-        # num_register_tokens = 0
-        kwargs = {'img_size': 518, 'init_values': 1.0, 'ffn_layer': 'mlp', 'interpolate_offset': 0.1}
-        self.backbone = vit_small(patch_size = 14, **kwargs)
-        self.backbone.load_state_dict(torch.load('/home/dell/.cache/torch/hub/checkpoints/dinov2_vits14_pretrain.pth'))
-        self.backbone.eval()
 
         self.conv3 = nn.Conv2d(1536, 1536, kernel_size=1, bias=False)
         self.bn3 = nn.BatchNorm2d(1536)
@@ -238,24 +182,11 @@ class Segmentor(nn.Module):
         # self.backbone -- DinoVisionTransformer()
         # self.backbone.forward.__code__
         #   -- <file "/home/dell/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/models/vision_transformer.py", line 324>
-        # pdb.set_trace()
-        # self.backbone_8 = self.backbone.blocks[8]
-        # self.backbone_9 = self.backbone.blocks[9]
-        # self.backbone_10 = self.backbone.blocks[10]
-        # self.backbone_11 = self.backbone.blocks[11]
-        # # pdb.set_trace()
 
 
     def forward(self, x):
         with torch.no_grad():
-            tokens = self.backbone.get_intermediate_layers(x, n=[8, 9, 10, 11], reshape=True) # last n=4 [8, 9, 10, 11]
-
-            # x = self.backbone_8(x)
-            # x = self.backbone_9(x)
-            # x = self.backbone_10(x)
-            # x = self.backbone_11(x)
-            # todos.debug.output_var("|x - tokens]", (x - tokens).abs())
-
+            tokens = self.backbone(x) # .get_intermediate_layers(x, n=[8, 9, 10, 11], reshape=True) # last n=4 [8, 9, 10, 11]
 
             f16 = torch.cat(tokens, dim=1)
 
@@ -351,8 +282,8 @@ class CrossChannelAttention(nn.Module):
         k = rearrange(k, 'b (head c) h w -> b head c (h w)', head=self.heads)
         v = rearrange(v, 'b (head c) h w -> b head c (h w)', head=self.heads)
 
-        q = torch.nn.functional.normalize(q, dim=-1)
-        k = torch.nn.functional.normalize(k, dim=-1)
+        q = F.normalize(q, dim=-1)
+        k = F.normalize(k, dim=-1)
 
         attn = (q @ k.transpose(-2, -1)) * self.temperature
         attn = attn.softmax(dim=-1)

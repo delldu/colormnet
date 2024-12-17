@@ -110,8 +110,8 @@ class LocalGatedPropagation(nn.Module):
         else:
             ky, kx = torch.meshgrid([
                 torch.arange(0, pad_height, device=local_attn.device),
-                torch.arange(0, pad_width, device=local_attn.device)
-            ])
+                torch.arange(0, pad_width, device=local_attn.device),
+            ], indexing="ij")
             # tensor [ky] size: [49, 70], min: 0.0, max: 48.0, mean: 23.999998
             # tensor [kx] size: [49, 70], min: 0.0, max: 69.0, mean: 34.5
             # ky --
@@ -125,7 +125,7 @@ class LocalGatedPropagation(nn.Module):
             qy, qx = torch.meshgrid([
                 torch.arange(0, height, device=local_attn.device),
                 torch.arange(0, width, device=local_attn.device)
-            ])
+            ], indexing="ij")
             # tensor [qy] size: [35, 56], min: 0.0, max: 34.0, mean: 17.0
             # tensor [qx] size: [35, 56], min: 0.0, max: 55.0, mean: 27.499998
 
