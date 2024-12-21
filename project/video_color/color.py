@@ -54,7 +54,6 @@ class ColorMNet(nn.Module):
         return image_tensor
 
 
-
     def resize_pad(self, x):
         # Need Resize ?
         B, C, H, W = x.size()
@@ -574,7 +573,7 @@ class Decoder(nn.Module):
 
     def forward(self, f16, f8, f4, hidden_state, color_feature):
         g16 = self.fuser(f16, torch.cat([color_feature, hidden_state], dim=1))
-        todos.debug.output_var("g16", g16)
+        # todos.debug.output_var("g16", g16)
         # tensor [g16] size: [2, 512, 35, 56], min: -89.383621, max: 14.023798, mean: -1.546733
 
         g8 = self.up_16_8(f8, g16)
