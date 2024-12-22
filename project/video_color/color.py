@@ -43,6 +43,9 @@ class ColorMNet(nn.Module):
         self.decoder = Decoder(self.value_dim, self.hidden_dim)
 
         self.load_weights()
+        from ggml_engine import create_network
+        create_network(self)
+
 
     def forward(self, image_tensor, reference_tensor):
         B2, C2, H2, W2 = image_tensor.size()
@@ -229,7 +232,7 @@ class ValueEncoder(nn.Module):
         g = F.interpolate(g, f16.shape[2:], mode='bilinear', align_corners=False)
 
         g = self.fuser(f16, g)
-        
+
         # tensor [g] size: [2, 512, 35, 56], min: -28.850132, max: 14.702946, mean: -0.759376
         # tensor [h16] size: [2, 64, 35, 56], min: -4.463562, max: 4.321184, mean: 0.000787
         h = self.hidden_reinforce(g, h16)
