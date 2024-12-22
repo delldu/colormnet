@@ -100,7 +100,7 @@ class ResNet(nn.Module):
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer1 = self._make_layer(block, 64, layers[0], stride=1)
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
@@ -109,11 +109,18 @@ class ResNet(nn.Module):
         # assert block.expansion == 1
         # assert block == BasicBlock
         downsample = None
+
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
                 nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
                 nn.BatchNorm2d(planes * block.expansion),
             )
+            # resnet50 --  Bottleneck -- layer1, layer2, layer3, layer4
+            # (downsample): Sequential(
+            #   (0): Conv2d(64, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+            #   (1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+            # )
+            # resnet18 --  block.expansion == 1 ==> Bottleneck -- layer2, layer3, layer4
 
         layers = [block(self.inplanes, planes, stride, downsample)]
         self.inplanes = planes * block.expansion

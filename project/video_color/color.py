@@ -28,18 +28,18 @@ class ColorMNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.MAX_H = 1024
-        self.MAX_W = 2048
-        self.MAX_TIMES = 1
+        self.MAX_W = 1024
+        self.MAX_TIMES = 112
         # ------------------------------------------------------------------------------
         self.key_dim = 64
         self.value_dim = 512
         self.hidden_dim = 64
 
-        self.key_encoder = KeyEncoder_DINOv2_v6()
+        self.key_encoder = DINOv2_v6()
         self.key_proj = KeyProjection(1024, self.key_dim)
 
         self.value_encoder = ValueEncoder(self.value_dim, self.hidden_dim)
-        self.short_term_attn = LocalGatedPropagation(d_qk=64, d_vu=512 * 2, d_att=64, max_dis=7)
+        self.short_term_attn = LocalAttention(d_qk=64, d_vu=512 * 2, d_att=64, max_dis=7)
         self.decoder = Decoder(self.value_dim, self.hidden_dim)
 
         self.load_weights()
@@ -102,7 +102,7 @@ class ColorMNet(nn.Module):
         return  self.decoder(*multi_scale_features, hidden_state, color_feature)
 
 
-class KeyEncoder_DINOv2_v6(nn.Module):
+class DINOv2_v6(nn.Module):
     def __init__(self):
         super().__init__()
         network = resnet.resnet50()
@@ -199,7 +199,7 @@ class ValueEncoder(nn.Module):
         self.layer2 = network.layer2 # 1/8, 128
         self.layer3 = network.layer3 # 1/16, 256
 
-        self.fuser = FeatureFusionBlock(1024, 256, value_dim, value_dim) # (1024 256) -> (384 256) -> (384 256)
+        self.fuser = FeatureFusionBlock(1024, 256, value_dim, value_dim)
         self.hidden_reinforce = HiddenReinforcer(value_dim, hidden_dim)
 
     def forward(self, image, f16, h16, ref_ab):
@@ -217,8 +217,8 @@ class ValueEncoder(nn.Module):
         g = torch.cat([image.repeat(B, 1, 1, 1), g], dim=1)
 
         g = self.conv1(g)
-        g = self.bn1(g) # 1/2, 64
-        g = self.maxpool(g)  # 1/4, 64
+        g = self.bn1(g)     # 1/2, 64
+        g = self.maxpool(g) # 1/4, 64
         g = F.relu(g) 
 
         g = self.layer1(g) # 1/4
@@ -229,13 +229,10 @@ class ValueEncoder(nn.Module):
         g = F.interpolate(g, f16.shape[2:], mode='bilinear', align_corners=False)
 
         g = self.fuser(f16, g)
-        # todos.debug.output_var("g", g)
-        # todos.debug.output_var("h16", h16)
-
+        
         # tensor [g] size: [2, 512, 35, 56], min: -28.850132, max: 14.702946, mean: -0.759376
         # tensor [h16] size: [2, 64, 35, 56], min: -4.463562, max: 4.321184, mean: 0.000787
         h = self.hidden_reinforce(g, h16)
-        # todos.debug.output_var("h", h16)
         # tensor [h] size: [2, 64, 35, 56], min: -4.807474, max: 4.858111, mean: 0.004066
 
         return g, h
@@ -246,16 +243,15 @@ class KeyProjection(nn.Module):
         assert in_dim == 1024
         assert keydim == 64
 
-        self.key_proj = nn.Conv2d(in_dim, keydim, kernel_size=3, padding=1)
-        # shrinkage
-        self.d_proj = nn.Conv2d(in_dim, 1, kernel_size=3, padding=1)
-        # selection
+        self.key_proj = nn.Conv2d(in_dim, keydim, kernel_size=3, padding=1) # shrinkage
+        self.d_proj = nn.Conv2d(in_dim, 1, kernel_size=3, padding=1) # selection
         self.e_proj = nn.Conv2d(in_dim, keydim, kernel_size=3, padding=1)
 
     def forward(self, x):
+        key = self.key_proj(x)
         shrinkage = self.d_proj(x)**2 + 1
         selection = torch.sigmoid(self.e_proj(x))
-        return self.key_proj(x), shrinkage, selection
+        return key, shrinkage, selection
 
 # ----------------------------------------
 class FeatureFusionBlock(nn.Module):
@@ -303,15 +299,9 @@ class HiddenReinforcer(nn.Module):
 
 
 class DWConv2d(nn.Module):
-    def __init__(self, indim, dropout=0.1):
+    def __init__(self, indim):
         super().__init__()
-        self.conv = nn.Conv2d(indim,
-                              indim,
-                              5,
-                              dilation=1,
-                              padding=2,
-                              groups=indim,
-                              bias=False)
+        self.conv = nn.Conv2d(indim, indim, 5, dilation=1, padding=2, groups=indim, bias=False)
         # self.dropout = nn.Dropout2d(p=dropout, inplace=True)
 
     def forward(self, x, size_2d):
@@ -323,8 +313,8 @@ class DWConv2d(nn.Module):
         x = x.view(bs, c, h * w).permute(2, 0, 1)
         return x
 
-# LocalAttention -- LA
-class LocalGatedPropagation(nn.Module):
+class LocalAttention(nn.Module):
+    '''LocalGatedPropagation'''
     def __init__(self, d_qk = 64, d_vu = 1024, max_dis=7, d_att=64):
         super().__init__()
         self.window_size = 2 * max_dis + 1
@@ -356,9 +346,12 @@ class LocalGatedPropagation(nn.Module):
         # tensor [k] size: [1, 64, 35, 56], min: -2.755859, max: 3.140625, mean: -0.143588
         # tensor [v] size: [1, 1024, 35, 56], min: -9.921875, max: 5.101562, mean: -0.014141
         # --------------------------------------------------------------------------------
-        assert q.size()[2:] == k.size()[2:]
-        assert q.size()[2:] == v.size()[2:]
         B, C, H, W = v.size()
+        v = v.view(1, 1024, H, W)
+        B, C, H, W = v.size()
+
+        assert q.size()[2:] == k.size()[2:]
+        # assert q.size()[2:] == v.size()[2:]
 
         relative_emb = self.relative_emb_k(q)
         relative_emb = relative_emb.view(B, self.window_size * self.window_size, H * W)
@@ -403,7 +396,7 @@ class LocalGatedPropagation(nn.Module):
         # # tensor [memory_value_short] size: [1960, 1, 1024], min: -2.007812, max: 1.608398, mean: 0.005006
 
         # memory_value_short = memory_value_short.permute(1, 2, 0).view(batch, num_objects, value_dim, h, w)
-        output = output.permute(1, 2, 0).view(B, -1, H, W)
+        output = output.permute(1, 2, 0).view(2, 512, H, W)
         return output # ==> [2, 512, 35, 56]
 
     def local2global(self, local_attn, height, width):
@@ -648,7 +641,6 @@ class UpsampleBlock(nn.Module):
         # tensor [up_g] size: [2, 512, 35, 56], min: -89.383621, max: 14.023798, mean: -1.546733
 
         skip_f = self.skip_conv(skip_f)
-        # g = upsample_groups(up_g, ratio=2)
         g = F.interpolate(up_g, scale_factor=2.0, mode='bilinear', align_corners=False)
         # tensor [skip_f] size: [1, 512, 70, 112], min: -3.976562, max: 2.03125, mean: 0.014867
         # tensor [g] size: [2, 512, 70, 112], min: -84.804108, max: 13.753417, mean: -1.546733

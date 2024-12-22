@@ -90,12 +90,22 @@ class XMem(nn.Module):
         self.W = W
         self.TOP_K = TOP_K
         self.sensory = torch.zeros(2, 64, H, W).to(device)   # Sensory Memory
-        self.workmem = XMemCache(device, H, W, WORK_SIZE)        # Short-Term, working Memory
-        self.longmem = XMemCache(device, H, W, LONG_SIZE)        # Long-Term Memory
+        self.lastkey = torch.zeros(1, 64, H, W).to(device)   # Last Key
+        self.lastval = torch.zeros(2, 512, H, W).to(device)  # Last Value
+        self.workmem = XMemCache(device, H, W, WORK_SIZE)    # Short-Term, working Memory
+        self.longmem = XMemCache(device, H, W, LONG_SIZE)    # Long-Term Memory
 
     def set_hidden(self, h):
         assert h.size() == self.sensory.size()
         self.sensory = h
+
+    def set_last_key(self, k):
+        assert k.size() == self.lastkey.size()
+        self.lastkey = k
+
+    def set_last_value(self, v):
+        assert v.size() == self.lastval.size()
+        self.lastval = v
 
     def set_work_memory(self, k, s, v):
         self.workmem.set(k, s, v)
@@ -105,6 +115,12 @@ class XMem(nn.Module):
 
     def get_hidden(self):
         return self.sensory
+
+    def get_last_key(self):
+        return self.lastkey
+
+    def get_last_value(self):
+        return self.lastval
 
     def _get_key(self):
         c = self.longmem.count + self.workmem.count
