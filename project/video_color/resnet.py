@@ -17,22 +17,32 @@ import pdb
 #     'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
 # }
 
-def conv3x3(in_planes, out_planes, stride=1, dilation=1):
+def conv3x3(in_planes, out_planes, stride=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                     padding=dilation, dilation=dilation, bias=False)
+                     padding=1, dilation=1, bias=False)
 
 class BasicBlock(nn.Module):
     expansion = 1
-
-    def __init__(self, inplanes, planes, stride=1, downsample=None, dilation=1):
+    #block(self.inplanes, planes, stride, downsample)
+    def __init__(self, inplanes, planes, stride=1, downsample=False):
         super().__init__()
-        self.conv1 = conv3x3(inplanes, planes, stride=stride, dilation=dilation)
+        # inplanes -- 64, 128, 256, 512 ?
+        self.conv1 = conv3x3(inplanes, planes, stride=stride)
         self.bn1 = nn.BatchNorm2d(planes)
         self.relu = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(planes, planes, stride=1, dilation=dilation)
+        self.conv2 = conv3x3(planes, planes, stride=1)
         self.bn2 = nn.BatchNorm2d(planes)
-        self.downsample = downsample
-        self.stride = stride
+
+        # if stride != 1 or self.inplanes != planes * block.expansion:
+        #     downsample = nn.Sequential(
+        #         nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
+        #         nn.BatchNorm2d(planes * block.expansion),
+        #     )
+        self.downsample = None
+        if downsample and (stride != 1 or inplanes != planes * self.expansion):
+            self.downsample = nn.Sequential(
+                nn.Conv2d(inplanes, planes * self.expansion, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * self.expansion))
 
     def forward(self, x):
         residual = x
@@ -52,21 +62,37 @@ class BasicBlock(nn.Module):
 
         return out
 
+def make_basicblock_layer(inplanes, planes, blocks, stride=1):
+    layers = [BasicBlock(inplanes, planes, stride, downsample=True)]
+    for i in range(1, blocks):
+        layers.append(BasicBlock(planes, planes, stride=1, downsample=False))
+
+    return nn.Sequential(*layers)
+
 
 class Bottleneck(nn.Module):
     expansion = 4
-
-    def __init__(self, inplanes, planes, stride=1, downsample=None, dilation=1):
+    # block(self.inplanes, planes, stride, downsample)
+    def __init__(self, inplanes, planes, stride=1, downsample=False):
         super().__init__()
+        # inplanes -- 64, 128, 256, 512 ?
         self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, dilation=dilation, padding=dilation, bias=False)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, dilation=1, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
         self.conv3 = nn.Conv2d(planes, planes * 4, kernel_size=1, bias=False)
         self.bn3 = nn.BatchNorm2d(planes * 4)
         self.relu = nn.ReLU(inplace=True)
-        self.downsample = downsample
-        self.stride = stride
+        # if stride != 1 or self.inplanes != planes * block.expansion:
+        #     downsample = nn.Sequential(
+        #         nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
+        #         nn.BatchNorm2d(planes * block.expansion),
+        #     )
+        self.downsample = None
+        if downsample and (stride != 1 or inplanes != planes * self.expansion):
+            self.downsample = nn.Sequential(
+                nn.Conv2d(inplanes, planes * self.expansion, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * self.expansion))
 
     def forward(self, x):
         residual = x
@@ -90,16 +116,29 @@ class Bottleneck(nn.Module):
 
         return out
 
+def make_bottleneck_layer(inplanes, planes, blocks, stride=1):
+    # planess -- [64, 128, 256, 512]
+    # blocks -- [3, 4, 6, 3]
+    layers = [Bottleneck(inplanes, planes, stride, downsample=True)]
+    inplanes = planes * 4
+    for i in range(1, blocks):
+        layers.append(Bottleneck(inplanes, planes, stride=1, downsample=False))
+
+    return nn.Sequential(*layers)
+
 
 class ResNet(nn.Module):
     def __init__(self, block, layers=(3, 4, 23, 3), extra_dim=0):
         self.inplanes = 64
         super().__init__()
+        assert self.inplanes == 64
 
         self.conv1 = nn.Conv2d(3+extra_dim, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        # for resnet18: layers == [2, 2, 2, 2]
+        # for resnet50: layers == [3, 4, 6, 3]
         self.layer1 = self._make_layer(block, 64, layers[0], stride=1)
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
@@ -108,24 +147,18 @@ class ResNet(nn.Module):
     def _make_layer(self, block, planes, blocks, stride=1):
         # assert block.expansion == 1
         # assert block == BasicBlock
-        downsample = None
 
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(planes * block.expansion),
-            )
-            # resnet50 --  Bottleneck -- layer1, layer2, layer3, layer4
-            # (downsample): Sequential(
-            #   (0): Conv2d(64, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
-            #   (1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-            # )
-            # resnet18 --  block.expansion == 1 ==> Bottleneck -- layer2, layer3, layer4
+        # downsample = None
 
-        layers = [block(self.inplanes, planes, stride, downsample)]
+        # if stride != 1 or self.inplanes != planes * block.expansion:
+        #     downsample = nn.Sequential(
+        #         nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
+        #         nn.BatchNorm2d(planes * block.expansion),
+        #     )
+        layers = [block(self.inplanes, planes, stride=stride, downsample=True)]
         self.inplanes = planes * block.expansion
         for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes, dilation=1))
+            layers.append(block(self.inplanes, planes, stride=1, downsample=False))
 
         return nn.Sequential(*layers)
 
@@ -202,7 +235,7 @@ class CrossChannelAttention(nn.Module):
 
         k = self.to_k_dw(self.to_k(decoder))
         v = self.to_v_dw(self.to_v(decoder))
-
+        # xxxx_debug
         q = rearrange(q, 'b (head c) h w -> b head c (h w)', head=self.heads)
         k = rearrange(k, 'b (head c) h w -> b head c (h w)', head=self.heads)
         v = rearrange(v, 'b (head c) h w -> b head c (h w)', head=self.heads)
@@ -229,12 +262,12 @@ class Fuse(nn.Module):
         self.norm3 = LayerNorm2d(out_feat)
         self.relu3 = nn.ReLU(inplace=True)
 
-    def forward(self, enc, dnc):
+    def forward(self, enc, dec):
         enc = self.encode_enc(enc)
         res = enc
         enc = self.norm1(enc)
-        dnc = self.norm2(dnc)
-        output = self.crossattn(enc, dnc) + res
+        dec = self.norm2(dec)
+        output = self.crossattn(enc, dec) + res
 
         output = self.norm3(output)
         output = self.relu3(output)

@@ -50,13 +50,13 @@ class PatchEmbed(nn.Module):
 
         x = self.proj(x)  # B C H W
         x = x.flatten(2).transpose(1, 2)  # B HW C
-        x = self.norm(x)
+        # x = self.norm(x)
 
         return x
 
 
 class Attention(nn.Module):
-    def __init__(self, dim, num_heads = 8):
+    def __init__(self, dim, num_heads = 6):
         super().__init__()
         # dim = 384
         # num_heads = 6
@@ -72,6 +72,7 @@ class Attention(nn.Module):
         B, N, C = x.shape
         # tensor [x] size: [1, 2561, 384], min: -7.700042, max: 5.273503, mean: 0.004173
 
+        # xxxx_debug
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         # tensor [qkv] size: [3, 1, 6, 2561, 64], min: -11.863246, max: 11.457247, mean: 0.03211
 
@@ -182,11 +183,11 @@ class DinoVisionTransformer(nn.Module):
 
         if npatch == N and w == h: # False
             return self.pos_embed
-        pos_embed = self.pos_embed.float()
-        class_pos_embed = pos_embed[:, 0]
+        pos_embed = self.pos_embed.float() # [1, 1370, 384]
+        class_pos_embed = pos_embed[:, 0:1]
         patch_pos_embed = pos_embed[:, 1:]
 
-        dim = x.shape[-1]
+        dim = x.shape[2]
         w0 = w // self.patch_size
         h0 = h // self.patch_size
         M = int(math.sqrt(N))  # Recover the number of patches in each dimension
@@ -210,7 +211,7 @@ class DinoVisionTransformer(nn.Module):
         # tensor [patch_pos_embed] size: [1, 2560, 384], min: -0.162149, max: 0.127178, mean: 8.2e-05
 
         # class_pos_embed.size() -- [1, 384]
-        return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1).to(previous_dtype)
+        return torch.cat((class_pos_embed, patch_pos_embed), dim=1).to(previous_dtype)
 
     def prepare_tokens_with_masks(self, x):
         B, nc, w, h = x.shape
