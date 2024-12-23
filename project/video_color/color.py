@@ -31,17 +31,13 @@ class ColorMNet(nn.Module):
         self.MAX_W = 1024
         self.MAX_TIMES = 112
         # ------------------------------------------------------------------------------
-        self.key_dim = 64
-        self.value_dim = 512
-        self.hidden_dim = 64
-
+        # self.value_dim = 512
+        # self.hidden_dim = 64
         self.key_encoder = DINOv2_v6()
         self.key_proj = KeyProjection()
 
-        # self.value_encoder = ValueEncoder(self.value_dim, self.hidden_dim)
         self.value_encoder = ValueEncoder()
         self.short_term_attn = LocalAttention(d_vu=512 * 2, d_att=64, max_dis=7)
-        # self.decoder = Decoder(self.value_dim, self.hidden_dim)
         self.decoder = Decoder()
 
         self.load_weights()
@@ -163,13 +159,9 @@ class Segmentor(nn.Module):
     '''一个线性设置的增强版本。将最后4层的patch token concat起来预测类logits'''
     def __init__(self):
         super().__init__()
-
         self.backbone = DinoVisionTransformer()
         self.conv3 = nn.Conv2d(1536, 1536, kernel_size=1, bias=False)
         self.bn3 = nn.BatchNorm2d(1536)
-        # self.backbone -- DinoVisionTransformer()
-        # self.backbone.forward.__code__
-        #   -- <file "/home/dell/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/models/vision_transformer.py", line 324>
 
     def forward(self, x):
         # tensor [x] size: [1, 3, 560, 896], min: -0.994517, max: 1.0, mean: -0.189531
@@ -193,10 +185,7 @@ class Segmentor(nn.Module):
 
 class ValueEncoder(nn.Module):
     def __init__(self):
-    # def __init__(self, value_dim, hidden_dim):
         super().__init__()
-        # assert value_dim == 512
-
         # network = resnet.resnet18()
         # self.conv1 = network.conv1
         # self.bn1 = network.bn1
@@ -204,9 +193,6 @@ class ValueEncoder(nn.Module):
         # self.layer1 = network.layer1 # 1/4, 64
         # self.layer2 = network.layer2 # 1/8, 128
         # self.layer3 = network.layer3 # 1/16, 256
-
-        value_dim = 512
-        hidden_dim = 64
         self.conv1 = nn.Conv2d(3 + 2, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -253,16 +239,13 @@ class ValueEncoder(nn.Module):
         return g, h
 
 class KeyProjection(nn.Module):
-    # def __init__(self, in_dim, keydim):
     def __init__(self):
         super().__init__()
-        # assert in_dim == 1024
-        # assert keydim == 64
         in_dim = 1024
-        keydim = 64
-        self.key_proj = nn.Conv2d(in_dim, keydim, kernel_size=3, padding=1) # shrinkage
+        key_dim = 64
+        self.key_proj = nn.Conv2d(in_dim, key_dim, kernel_size=3, padding=1) # shrinkage
         self.d_proj = nn.Conv2d(in_dim, 1, kernel_size=3, padding=1) # selection
-        self.e_proj = nn.Conv2d(in_dim, keydim, kernel_size=3, padding=1)
+        self.e_proj = nn.Conv2d(in_dim, key_dim, kernel_size=3, padding=1)
 
     def forward(self, x):
         key = self.key_proj(x)
@@ -278,7 +261,7 @@ class FeatureFusionBlock(nn.Module):
         x_in_dim = 1024
         g_mid_dim = 512
         g_out_dim = 512
-        self.block1 = GroupResBlock(x_in_dim+g_in_dim, g_mid_dim)
+        self.block1 = GroupResBlock(x_in_dim + g_in_dim, g_mid_dim)
         self.attention = CBAM(g_mid_dim)
         self.block2 = GroupResBlock(g_mid_dim, g_out_dim)
 
@@ -299,7 +282,7 @@ class HiddenReinforcer(nn.Module):
         hidden_dim = 64
 
         self.hidden_dim = hidden_dim
-        self.transform = nn.Conv2d(g_dim+hidden_dim, hidden_dim*3, kernel_size=3, padding=1)
+        self.transform = nn.Conv2d(g_dim + hidden_dim, hidden_dim*3, kernel_size=3, padding=1)
 
     def forward(self, g, h):
         # tensor [g] size: [2, 512, 35, 56], min: -28.850132, max: 14.702946, mean: -0.759376
@@ -344,7 +327,7 @@ class LocalAttention(nn.Module):
         self.max_dis = max_dis
         assert self.max_dis == 7
 
-        self.hidden_dim = d_vu
+        self.value_dim = d_vu
         self.d_att = d_att
         assert self.d_att == 64
 
@@ -384,7 +367,7 @@ class LocalAttention(nn.Module):
 
         assert k.size() == k.view(-1, self.d_att, H, W).size()
         k = k.view(-1, self.d_att, H, W).contiguous()
-        v = v.view(-1, 1, self.hidden_dim, H * W)
+        v = v.view(-1, 1, value_dim, H * W)
         
         # tensor [q] size: [1, 64, 35, 56], min: -0.342285, max: 0.398682, mean: -0.017892
         # tensor [k] size: [1, 64, 35, 56], min: -2.755859, max: 3.140625, mean: -0.143588
@@ -547,6 +530,7 @@ class ChannelPool(nn.Module):
         # tensor [x] size: [2, 512, 35, 56], min: -5.116851, max: 2.511841, mean: -0.022028
         # (Pdb) torch.max(x,1)[0].size() -- torch.Size([2, 35, 56]) ==> [2, 1, 35, 56]
         # torch.mean(x,1).size() -- [2, 35, 56] ==> [2, 1, 35, 35]
+        # xxxx_debug -- ggml_max_ext ... ?
         return torch.cat( (torch.max(x,1)[0].unsqueeze(1), torch.mean(x,1).unsqueeze(1)), dim=1) #[2, 2, 35, 56]
 
 class SpatialGate(nn.Module):
@@ -575,15 +559,14 @@ class CBAM(nn.Module):
         return x_out
 
 class Decoder(nn.Module):
-    # def __init__(self, value_dim, hidden_dim):
     def __init__(self):
         super().__init__()
         value_dim = 512
         hidden_dim = 64
-        self.fuser = FeatureFusionBlock(value_dim+hidden_dim) # 576
+        self.fuser = FeatureFusionBlock(value_dim + hidden_dim) # 576
         self.hidden_update = HiddenUpdater() 
-        self.up_16_8 = UpsampleBlock(512, 512, 256) # 1/16 -> 1/8
-        self.up_8_4 = UpsampleBlock(256, 256, 256) # 1/8 -> 1/4
+        self.up_16_8 = UpsampleBlock(512, 512)
+        self.up_8_4 = UpsampleBlock(256, 256)
         self.pred = nn.Conv2d(256, 1, kernel_size=3, padding=1, stride=1)
 
     def forward(self, f16, f8, f4, hidden_state, color_feature):
@@ -607,7 +590,6 @@ class Decoder(nn.Module):
         return hidden_state, predict_color_ab
 
 class HiddenUpdater(nn.Module):
-    # Used in the decoder, multi-scale feature + GRU
     def __init__(self):
         super().__init__()
         self.hidden_dim = 64
@@ -615,7 +597,6 @@ class HiddenUpdater(nn.Module):
         self.g8_conv = nn.Conv2d(256, 256, kernel_size=1)
         self.g4_conv = nn.Conv2d(257, 256, kernel_size=1)
         self.transform = nn.Conv2d(320, self.hidden_dim*3, kernel_size=3, padding=1)
-
 
     def forward(self, g, h):
         # g is list: len = 3
@@ -648,8 +629,9 @@ class HiddenUpdater(nn.Module):
 
 
 class UpsampleBlock(nn.Module):
-    def __init__(self, skip_dim, g_up_dim, g_out_dim):
+    def __init__(self, skip_dim, g_up_dim):
         super().__init__()
+        g_out_dim = 256
         self.skip_conv = nn.Conv2d(skip_dim, g_up_dim, kernel_size=3, padding=1)
         self.out_conv = GroupResBlock(g_up_dim, g_out_dim)
 
