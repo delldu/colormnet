@@ -846,8 +846,8 @@ ggml_tensor_t* ggml_nn_slice(ggml_context_t *ctx, ggml_tensor_t *x, int dim, int
     size_t starts[4] = {0, 0, 0, 0};
     size_t stops[4] = {0, 0, 0, 0};
     size_t steps[4] = {1, 1, 1, 1};
-    size_t shapes[4] = {0, 0, 0, 0};
-    size_t strides[4] = {0, 0, 0, 0};
+    size_t ret_ne[4] = {0, 0, 0, 0};
+    size_t ret_nb[4] = {0, 0, 0, 0};
     size_t offset = 0;
 
     starts[dim] = MAX(start, 0);
@@ -859,17 +859,16 @@ ggml_tensor_t* ggml_nn_slice(ggml_context_t *ctx, ggml_tensor_t *x, int dim, int
 
     // ----------------------------------------------------------------------------------------
     for (int i = 0; i < 4; i++) {
-        shapes[i] = (stops[i] - starts[i] + steps[i] - 1) / steps[i]; // shaps = (stop - step) // step
+        ret_ne[i] = (stops[i] - starts[i] + steps[i] - 1) / steps[i]; // shaps = (stop - step) // step
     }
     for (int i = 0; i < 4; i++) {
-        strides[i] = (size_t)x->nb[i] * steps[i];
+        ret_nb[i] = (size_t)x->nb[i] * steps[i];
     }
     // offset = 0;
     for (int i = 0; i < 4; i++) {
         offset += (size_t)x->nb[i] * starts[i];
     }
     // ----------------------------------------------------------------------------------------
-
     // GGML_API struct ggml_tensor * ggml_view_4d(
     //         struct ggml_context * ctx,
     //         struct ggml_tensor  * a,
@@ -882,10 +881,10 @@ ggml_tensor_t* ggml_nn_slice(ggml_context_t *ctx, ggml_tensor_t *x, int dim, int
     //         size_t                nb3,
     //         size_t                offset);
     x = ggml_view_4d(ctx, x,
-            (int64_t)shapes[0], (int64_t)shapes[1], (int64_t)shapes[2], (int64_t)shapes[3],
-            strides[1], strides[2], strides[3],
+            (int64_t)ret_ne[0], (int64_t)ret_ne[1], (int64_t)ret_ne[2], (int64_t)ret_ne[3],
+            ret_nb[1], ret_nb[2], ret_nb[3],
             offset);
-    return ggml_dup(ctx, x); // fix bug: make sure x could be padded
+    return ggml_cont(ctx, x); // fix bug: make sure x could be aligned
 }
 
 // dell_add

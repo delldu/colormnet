@@ -8,8 +8,8 @@
 #************************************************************************************/
 #
 
-TARGET := video_matte
-SOURCE := src/video_matte.c main.c
+TARGET := video_color
+SOURCE := src/video_color.c main.c
 
 INCS := \
 		-Iinclude -Isrc \
@@ -72,4 +72,4 @@ clean:
 
 format:
 	clang-format --style="{BasedOnStyle: WebKit, TabWidth: 4, IndentWidth: 4, ColumnLimit: 120}" \
-	-i include/*.h src/*.h src/*.cpp main.cpp
+	-i include/*.h src/*.h src/*.c main.c
