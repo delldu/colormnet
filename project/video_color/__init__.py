@@ -103,9 +103,9 @@ def test_color_model(model, device):
     # # tensor [hidden] size: [2, 64, 35, 56], min: -3.855072, max: 4.748185, mean: 0.110133
 
     # multi_scale_features = (f16, f8, f4)
-    # hidden, predict = model.decode_color(multi_scale_features, value, hidden)
+    # hidden, predict_ab = model.decode_color(multi_scale_features, value, hidden)
     # todos.debug.output_var("hidden", hidden)
-    # todos.debug.output_var("predict", predict)
+    # todos.debug.output_var("predict_ab", predict_ab)
     # print("-" * 80)
 
     # tensor [key] size: [1, 64, 35, 56], min: -2.75, max: 3.166016, mean: -0.143513
@@ -118,45 +118,48 @@ def test_color_model(model, device):
     todos.debug.output_var("local_value", local_value)
     # tensor [local_value] size: [1960, 1, 1024], min: -0.21165, max: 0.222777, mean: 0.001241
 
-def test_self_color(model, device, input_rgb):
-    B, C, H, W = input_rgb.size()
+# def test_self_color(model, device, input_rgb):
+#     B, C, H, W = input_rgb.size()
 
-    MAX_TIMES = 112
-    pad_h = (MAX_TIMES - (H % MAX_TIMES)) % MAX_TIMES
-    pad_w = (MAX_TIMES - (W % MAX_TIMES)) % MAX_TIMES
-    if pad_h > 0 or pad_w > 0:
-        input_rgb = F.pad(input_rgb, (0, pad_w, 0, pad_h), 'reflect')
+#     MAX_TIMES = 112
+#     pad_h = (MAX_TIMES - (H % MAX_TIMES)) % MAX_TIMES
+#     pad_w = (MAX_TIMES - (W % MAX_TIMES)) % MAX_TIMES
+#     if pad_h > 0 or pad_w > 0:
+#         input_rgb = F.pad(input_rgb, (0, pad_w, 0, pad_h), 'reflect')
 
-    # new size ?
-    B2, C2, H2, W2 = input_rgb.size()
+#     # new size ?
+#     B2, C2, H2, W2 = input_rgb.size()
 
-    input_lab = data.rgb2lab(input_rgb).to(device)
-    output_l = input_lab[:, 0:1, :, :] 
-    input_l = input_lab[:, 0:1, :, :]/100.0
-    input_l = (input_l - 0.5) * 2.0 # in [-1.0, 1.0]
+#     input_lab = data.rgb2lab(input_rgb).to(device)
+#     output_l = input_lab[:, 0:1, :, :] 
+#     input_l = input_lab[:, 0:1, :, :]/100.0
+#     input_l = (input_l - 0.5) * 2.0 # in [-1.0, 1.0]
 
-    input_ab = input_lab[:, 1:3, :, :]/110.0 # in [-1.0, 1.0]
-    input_lll = input_l.repeat(1, 3, 1, 1)
+#     input_ab = input_lab[:, 1:3, :, :]/110.0 # in [-1.0, 1.0]
+#     input_lll = input_l.repeat(1, 3, 1, 1)
 
-    input_hidden = torch.zeros(2, 64, H2//16, W2//16).to(device)
-    key, shrinkage, selection, f16, f8, f4 = model.encode_key(input_lll)
-    value, hidden = model.encode_value(input_lll, f16, input_hidden, input_ab)
+#     input_hidden = torch.zeros(2, 64, H2//16, W2//16).to(device)
+#     key, shrinkage, selection, f16, f8, f4 = model.encode_key(input_lll)
+#     value, hidden = model.encode_value(input_lll, f16, input_hidden, input_ab)
 
-    multi_scale_features = (f16, f8, f4)
-    hidden, predict = model.decode_color(multi_scale_features, value, hidden)
-    output_ab = predict * 110.0
-    output_lab = torch.cat([output_l, output_ab], dim=1)
+#     multi_scale_features = (f16, f8, f4)
+#     hidden, predict_ab = model.decode_color(multi_scale_features, value, hidden)
+#     output_ab = predict_ab * 110.0
+#     output_lab = torch.cat([output_l, output_ab], dim=1)
 
-    output_rgb = data.lab2rgb(output_lab)
-    output_rgb = output_rgb[:, :, 0:H, 0:W].cpu()
-    del input_lab, input_ab, input_lll, input_hidden, value, hidden, predict, output_l, output_ab, output_lab
+#     output_rgb = data.lab2rgb(output_lab)
+#     output_rgb = output_rgb[:, :, 0:H, 0:W].cpu()
+#     del input_lab, input_ab, input_lll, input_hidden, value, hidden, predict_ab, output_l, output_ab, output_lab
 
-    return output_rgb
+#     return output_rgb
 
 def rgb_lab(input_rgb):
+    # tensor [input_rgb] size: [1, 3, 560, 896], min: 0.0, max: 1.0, mean: 0.339481
     input_lab = data.rgb2lab(input_rgb)
+    # tensor [input_l] size: [1, 1, 560, 896], min: -49.55986, max: 49.681641, mean: -10.992733
+    # tensor [input_ab] size: [1, 2, 560, 896], min: -51.83556, max: 72.052292, mean: 3.19213
+    # input_lab[:, 0:1, :, :] in [-50.0, 50]
     input_lll = input_lab[:, 0:1, :, :]/100.0
-    # input_lll = (input_lll - 0.5) * 2.0
     input_lll = input_lll.repeat(1, 3, 1, 1)
     input_ab = input_lab[:, 1:3, :, :]/110
     return input_lll, input_ab
@@ -201,6 +204,7 @@ def video_predict(input_file, color_files, output_file):
         with torch.no_grad():
             key, shrinkage, selection, f16, f8, f4 = model.encode_key(image_lll)
             value, hidden = model.encode_value(image_lll, f16, hidden_state, image_ab)
+
         xmem.set_long_memory(key, shrinkage, value)
         xmem.set_hidden(hidden)
         xmem.set_last_key(key)
@@ -237,9 +241,9 @@ def video_predict(input_file, color_files, output_file):
             short_value = model.short_term_attn(key, last_key, last_value)
             value = value + short_value
 
-            hidden, predict = model.decode_color(multi_scale_features, value, hidden)
+            hidden, predict_ab = model.decode_color(multi_scale_features, value, hidden)
             output_l = image_lll[:, 0:1, :, :] * 100.0
-            output_ab = predict * 110.0
+            output_ab = predict_ab * 110.0
             output_lab = torch.cat([output_l, output_ab], dim=1)
             output_rgb = data.lab2rgb(output_lab)
 
@@ -249,7 +253,7 @@ def video_predict(input_file, color_files, output_file):
         if no % 5 == 0: # key frames ...
             # update work memory
             with torch.no_grad():
-                value, hidden = model.encode_value(image_lll, f16, hidden, predict[:, 0:2, :, :])
+                value, hidden = model.encode_value(image_lll, f16, hidden, predict_ab[:, 0:2, :, :])
             xmem.set_work_memory(key, shrinkage, value)
             xmem.set_hidden(hidden)
             xmem.set_last_key(key)
@@ -288,10 +292,10 @@ def image_predict(input_files, color_files, output_file):
     resize_model.eval()
 
     # return test_color_model(model, device)
-    fake_frame = todos.data.load_tensor(gray_images[0])
+    fake_frame = todos.data.load_tensor(gray_images[0]) # [1, 3, 480, 832]
     with torch.no_grad():
         fake_frame = resize_model(fake_frame)
-    B, C, H, W = fake_frame.size()
+    B, C, H, W = fake_frame.size() # [1, 3, 560, 896]
     xmem = XMem(device, H//16, W//16, 4, 4)
 
     # examples image must be reverse sorted !!!
@@ -308,8 +312,24 @@ def image_predict(input_files, color_files, output_file):
         image = image.to(device)
         image_lll, image_ab = rgb_lab(image)
         with torch.no_grad():
+            # tensor [image_lll] size: [1, 3, 560, 896], min: -0.495599, max: 0.496816, mean: -0.109927
             key, shrinkage, selection, f16, f8, f4 = model.encode_key(image_lll)
+            # tensor [key] size: [1, 64, 35, 56], min: -2.803887, max: 3.253764, mean: -0.159051
+            # tensor [shrinkage] size: [1, 1, 35, 56], min: 23.295803, max: 45.933445, mean: 32.660492
+            # tensor [selection] size: [1, 64, 35, 56], min: 0.0, max: 0.902618, mean: 0.500047
+            # tensor [f16] size: [1, 1024, 35, 56], min: 0.0, max: 2.623592, mean: 0.064568
+            # tensor [f8] size: [1, 512, 70, 112], min: 0.0, max: 1.733069, mean: 0.093956
+            # tensor [f4] size: [1, 256, 140, 224], min: 0.0, max: 6.521586, mean: 0.203084
+
+            todos.debug.output_var("image_lll", image_lll)
+            todos.debug.output_var("f16", f16)
+            todos.debug.output_var("hidden_state", hidden_state)
+            todos.debug.output_var("image_ab", image_ab)
             value, hidden = model.encode_value(image_lll, f16, hidden_state, image_ab)
+            todos.debug.output_var("value", value)
+            todos.debug.output_var("hidden", hidden)
+            print("-" * 80)
+
         xmem.set_long_memory(key, shrinkage, value)
         xmem.set_hidden(hidden)
         xmem.set_last_key(key)
@@ -337,6 +357,8 @@ def image_predict(input_files, color_files, output_file):
 
             multi_scale_features = (f16, f8, f4)
             value = xmem.forward(key, selection)
+            # pdb.set_trace()
+
             hidden = xmem.get_hidden()
 
             # reference local frame ...
@@ -345,9 +367,11 @@ def image_predict(input_files, color_files, output_file):
             short_value = model.short_term_attn(key, last_key, last_value)
             value = value + short_value
 
-            hidden, predict = model.decode_color(multi_scale_features, value, hidden)
+            # hidden, predict_ab = model.decode_color(multi_scale_features, value, hidden)
+            predict_ab = model.decode_color(multi_scale_features, value, hidden)
+
             output_l = image_lll[:, 0:1, :, :] * 100.0
-            output_ab = predict * 110.0
+            output_ab = predict_ab * 110.0
             output_lab = torch.cat([output_l, output_ab], dim=1)
             output_rgb = data.lab2rgb(output_lab)
             del image_ab, selection, f8, f4, output_l, output_ab, output_lab
@@ -358,7 +382,7 @@ def image_predict(input_files, color_files, output_file):
 
         if no % 5 == 0:
             # update work memory
-            value, hidden = model.encode_value(image_lll, f16, hidden, predict[:, 0:2, :, :])
+            value, hidden = model.encode_value(image_lll, f16, hidden, predict_ab[:, 0:2, :, :])
             xmem.set_work_memory(key, shrinkage, value)
             xmem.set_hidden(hidden)            
             xmem.set_last_key(key)

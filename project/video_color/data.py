@@ -101,7 +101,7 @@ def rgb2lab(rgb):
 
 
 def lab2rgb(lab_rs):
-    l = lab_rs[:, [0], :, :] + 50.0
+    l = lab_rs[:, [0], :, :]  + 50.0
     ab = lab_rs[:, 1:, :, :]
     lab = torch.cat((l, ab), dim=1)
 

@@ -9,6 +9,7 @@
 // ggml_set_output(x);
 
 int tensor_are_same_shape(TENSOR *t1, TENSOR *t2);
+void tensor_debug_show(char *prompt, TENSOR* tensor);
 
 
 struct XMemCache {
@@ -46,6 +47,13 @@ struct XMemCache {
         index = count = 0;
     }
 
+    void dump(char *title) {
+        syslog_info("%s", title);
+        tensor_debug_show((char *)"  k", k);
+        tensor_debug_show((char *)"  s", s);
+        tensor_debug_show((char *)"  v", v);
+    }
+
     void set(TENSOR *k2,  TENSOR *s2, TENSOR *v2) {
         // i = self.index % self.S
         // self.k[:, :, :, i:i+1] = k.view(1, 64, self.H*self.W, 1)
@@ -69,7 +77,6 @@ struct XMemCache {
     }
 };
 
-
 struct XMem : GGMLNetwork {
     int TOP_K = 30;
 
@@ -81,6 +88,31 @@ struct XMem : GGMLNetwork {
         GGML_UNUSED(prefix);
     }
 
+    // def get_similarity(mem_key, mem_shrinkage, query_key, query_selection):
+    //     # tensor [mem_key] size: [1, 64, 1960], min: -2.803887, max: 3.253764, mean: -0.159051
+    //     # tensor [mem_shrinkage] size: [1, 1960, 1], min: 23.295803, max: 45.933445, mean: 32.660492
+    //     # tensor [query_key] size: [1, 64, 1960], min: -2.80991, max: 3.298451, mean: -0.158671
+    //     # tensor [query_selection] size: [1, 64, 1960], min: 0.0, max: 0.905321, mean: 0.5004
+
+    //     CK = mem_key.shape[1] # 64
+
+    //     mem_key = mem_key.transpose(1, 2)
+    //     a_sq = (mem_key.pow(2) @ query_selection)
+    //     # tensor [a_sq] size: [1, 1960, 1960], min: 5.804688, max: 25.171875, mean: 13.989838
+
+    //     two_ab = 2 * (mem_key @ (query_key * query_selection))
+    //     # tensor [two_ab] size: [1, 1960, 1960], min: 6.933594, max: 44.0, mean: 22.547285
+
+    //     b_sq = (query_selection * query_key.pow(2)).sum(1, keepdim=True)
+    //     # tensor [b_sq] size: [1, 1, 1960], min: 7.427909, max: 22.625141, mean: 14.256322
+
+    //     similarity = (-a_sq + two_ab - b_sq)
+    //     similarity = similarity * mem_shrinkage / math.sqrt(CK)   # B*N*HW
+    //     # tensor [similarity] size: [1, 1960, 1960], min: -87.556335, max: -0.000922, mean: -19.917494
+
+    //     return similarity
+
+
     ggml_tensor_t* get_similarity(struct ggml_context* ctx, ggml_tensor_t* mem_key, ggml_tensor_t* mem_shrinkage, 
         ggml_tensor_t* query_key, ggml_tensor_t* query_selection) {
         // # tensor [mem_key] size: [1, 64, 1960], min: -2.803887, max: 3.253764, mean: -0.159051
@@ -91,7 +123,8 @@ struct XMem : GGMLNetwork {
         ggml_tensor_t *a_sq, *two_ab, *b_sq, *similarity;
 
         // mem_key = mem_key.transpose(1, 2)
-        mem_key = ggml_transpose(ctx, mem_key);
+        mem_key = ggml_cont(ctx, ggml_transpose(ctx, mem_key));
+        // mem_key    f32 [64, 1960, 1, 1], mem_key (transposed)
 
         // a_sq = (mem_key.pow(2) @ query_selection)
         a_sq = ggml_mul(ctx, mem_key, mem_key);
@@ -114,7 +147,7 @@ struct XMem : GGMLNetwork {
         similarity = ggml_sub(ctx, similarity, a_sq);
 
         similarity = ggml_mul(ctx, similarity, mem_shrinkage);
-        similarity = ggml_scale(ctx, similarity, 8.0f); // sqrt(64.0)
+        similarity = ggml_scale(ctx, similarity, 0.125f); // sqrt(64.0)
 
         return similarity;
     }
@@ -125,38 +158,75 @@ struct XMem : GGMLNetwork {
         ggml_tensor_t *affinity, *topk_out, *index, *value;
 
         topk_out = ggml_topk(ctx, similarity, 1 /*dim*/, top_k);
+
         value = ggml_nn_slice(ctx, topk_out, 1 /*dim*/, 0, top_k, 1/*step*/);
         index = ggml_nn_slice(ctx, topk_out, 1 /*dim*/, top_k, 2*top_k, 1/*step*/);
         value = ggml_softmax(ctx, value, 1/*dim*/);
+        {
+            value = ggml_cont(ctx, value);
+            ggml_set_name(value, "SOFTMAX");
+            ggml_set_output(value);            
+        }
 
         affinity = ggml_dup(ctx, similarity);
         affinity = ggml_constant(ctx, affinity, 0.0f);
         affinity = ggml_paste(ctx, affinity, 1 /*dim*/, index, value);
 
+        // # tensor [affinity] size: [1, 1960, 1960], min: 0.0, max: 0.442188, mean: 0.000255
         return affinity;
     }
 
-
     ggml_tensor_t* forward(ggml_context_t* ctx, int argc, ggml_tensor_t* argv[]) {
-        GGML_UNUSED(argc);
+        GGML_ASSERT(argc == 5);
         ggml_tensor_t* q_key = argv[0];
         ggml_tensor_t* q_selection = argv[1];
         ggml_tensor_t* mem_key = argv[2];
         ggml_tensor_t* mem_shrinkage = argv[3];
         ggml_tensor_t* mem_value = argv[4];
 
-        ggml_tensor_t *affinity, *final_value;
+        // xxxx_debug
+        int HW, C, W, H;
+        HW = (int)mem_key->ne[0];
+        C = (int)mem_key->ne[3];
 
-        int W = (int)q_key->ne[0];
-        int H = (int)q_key->ne[1];
+        // mem_key:  (HW, 64, 1, C) --> (HW, C, 64, 1) -> (HWC, 64, 1)
+        mem_key = ggml_cont(ctx, ggml_permute(ctx, mem_key, 0, 2, 3, 1));
+        mem_key = ggml_reshape_3d(ctx, mem_key, HW*C, 64, 1);
+
+        // mem_shrinkage: (1, HW, 1, C) --> (1, HW, C, 1) -> (1, HWC, 1)
+        mem_shrinkage = ggml_reshape_3d(ctx, mem_shrinkage, 1, HW * C, 1);
+
+        // mem_value: (HW, 512, 2, C) --> (HW, C, 512, 2) -> (HWC, 512, 2)
+        mem_value = ggml_cont(ctx, ggml_permute(ctx, mem_value, 0, 2, 3, 1));
+        mem_value = ggml_reshape_3d(ctx, mem_value, HW*C, 512, 2);
+
+        ggml_tensor_t *similarity, *affinity, *final_value;
+
+        W = (int)q_key->ne[0];
+        H = (int)q_key->ne[1];
         // int C = (int)q_key->ne[2];
         // int B = (int)q_key->ne[3];
+
         q_key = ggml_reshape_3d(ctx, q_key, H*W, 64, 1);
         q_selection = ggml_reshape_3d(ctx, q_selection, H*W, 64, 1);
+        similarity = get_similarity(ctx, mem_key, mem_shrinkage, q_key, q_selection);
+        // tensor [similarity] size: [1, 1960, 1960], min: -87.556335, max: -0.000922, mean: -19.917494
+        affinity = do_softmax(ctx, similarity, TOP_K);
+        // tensor [affinity] size: [1, 1960, 1960], min: 0.0, max: 0.983038, mean: 0.00051
+        // xxxx_debug
+        {
+            similarity = ggml_cont(ctx, similarity);
+            ggml_set_name(similarity, "SIMILARITY");
+            ggml_set_output(similarity);
 
-        affinity = get_similarity(ctx, mem_key, mem_shrinkage, q_key, q_selection);
-        affinity = do_softmax(ctx, affinity, TOP_K);
+            affinity = ggml_cont(ctx, affinity);
+            ggml_set_name(affinity, "AFFINITY");
+            ggml_set_output(affinity);
+        }
+
         final_value = ggml_nn_mul_mat(ctx, mem_value, affinity);
+        final_value = ggml_reshape_4d(ctx, final_value, W, H, 512, 2);
+        // tensor [final_value] size: [2, 512, 35, 56], min: -10.663672, max: 5.041441, mean: -0.008074
 
         return final_value;
     }
@@ -178,7 +248,7 @@ struct VideoXMemNetwork {
     XMem net;
 
     // -----------------------------------------------------------------------------------------
-    void create_cache(int H2, int W2, int S1, int S2) {
+    void alloc_cache(int H2, int W2, int S1, int S2) {
         GGML_ASSERT(sensory == NULL); // DO NOT create twice !!!
 
         H = H2; W = W2; WORK_SIZE = S1; LONG_SIZE = S2;
@@ -195,21 +265,46 @@ struct VideoXMemNetwork {
         longmem.create(H, W, LONG_SIZE);
     }
 
+    void free_cache() {
+        tensor_destroy(sensory);
+        tensor_destroy(lastkey);
+        tensor_destroy(lastval);
+        workmem.destroy();
+        longmem.destroy();
+
+        sensory = NULL; // LET cache could be re-created !!!
+    }
+
+    void dump() {
+        if (sensory != NULL) {
+            tensor_debug_show((char *)"hidden", sensory);
+            tensor_debug_show((char *)"last_key", lastkey);
+            tensor_debug_show((char *)"last_value", lastval);
+            workmem.dump("work memory");
+            longmem.dump("long memory");
+        } else {
+            syslog_info("xmem is empty.");
+        }
+    }
+
     // -----------------------------------------------------------------------------------------
     void set_work_memory(TENSOR *k, TENSOR *s, TENSOR *v, TENSOR *h) {
+        GGML_ASSERT(sensory != NULL); // MAKE SURE xmem has been created !!!
         GGML_ASSERT(tensor_are_same_shape(k, lastkey));
         GGML_ASSERT(tensor_are_same_shape(v, lastval));
         GGML_ASSERT(tensor_are_same_shape(h, sensory));
 
-        memcpy(sensory->data, h->data, h->batch * h->chan * h->height * h->width * sizeof(float));
-        memcpy(lastval->data, v->data, v->batch * v->chan * v->height * v->width * sizeof(float));
         memcpy(lastkey->data, k->data, k->batch * k->chan * k->height * k->width * sizeof(float));
+        memcpy(lastval->data, v->data, v->batch * v->chan * v->height * v->width * sizeof(float));
+        memcpy(sensory->data, h->data, h->batch * h->chan * h->height * h->width * sizeof(float));
 
         workmem.set(k, s, v);
     }
 
     // -----------------------------------------------------------------------------------------
     void set_long_memory(TENSOR *k, TENSOR *s, TENSOR *v, TENSOR *h) {
+        GGML_ASSERT(sensory != NULL); // MAKE SURE xmem has been created !!!
+
         GGML_ASSERT(tensor_are_same_shape(k, lastkey));
         GGML_ASSERT(tensor_are_same_shape(v, lastval));
         GGML_ASSERT(tensor_are_same_shape(h, sensory));
@@ -237,116 +332,94 @@ struct VideoXMemNetwork {
     }
 
     TENSOR *get_key() {
-        TENSOR *key;
-        float *src_point, *dst_point, *s_start;
-        int s_offset, d_offset;
+        int c, n;
+        TENSOR *m_key;
+        float *s_start, *d_start;
 
-        int c = workmem.count + longmem.count;
-        if (c < 1)
+        c = workmem.count + longmem.count;
+        if (c < 1) {
+            GGML_ASSERT(c > 0);
             return NULL;
-
-        key = tensor_create(1, 1, 64, c * H * W);
-        CHECK_TENSOR(key);
-
-        for (int i = 0; i < workmem.count; i++) {
-            s_start = tensor_start_batch(workmem.k, i);
-
-            for (int h = 0; h < 64; h++) {
-                s_offset = h * H * W;
-                d_offset = i * 64 * c * H * W + h * H * W;
-
-                src_point = s_start + s_offset;
-                dst_point = key->data + d_offset;
-                memcpy(dst_point, src_point, H * W * sizeof(float));
-            }
         }
 
-        for (int i = 0; i < longmem.count; i++) {
-            s_start = tensor_start_batch(longmem.k, i);
-            for (int h = 0; h < 64; h++) {
-                s_offset = h * H * W;
-                d_offset = (i + workmem.count) * 64 * c * H * W + h * H * W;
+        m_key = tensor_create(c, 1, 64, H * W);
+        CHECK_TENSOR(m_key);
 
-                src_point = s_start + s_offset;
-                dst_point = key->data + d_offset;
-                memcpy(dst_point, src_point, H * W * sizeof(float));
-            }
+        n = 64 * H * W; // tensor elements
+        if (workmem.count > 0) {
+            s_start = tensor_start_batch(workmem.k, 0);
+            d_start = tensor_start_batch(m_key, 0);
+            memcpy(d_start, s_start, workmem.count * n * sizeof(float));
         }
 
-        return key;
+        if (longmem.count > 0) {
+            s_start = tensor_start_batch(longmem.k, 0);
+            d_start = tensor_start_batch(m_key, workmem.count);
+            memcpy(d_start, s_start, longmem.count * n * sizeof(float));
+        }
+
+        return m_key;
     }
 
     TENSOR *get_shrinkage() {
-        TENSOR *shrinkage;
-        float *src_point, *dst_point, *s_start;
-        int s_offset, d_offset;
+        int c, n;
+        TENSOR *m_shrinkage;
+        float *s_start, *d_start;
 
-        int c = workmem.count + longmem.count;
-        if (c < 1)
+        c = workmem.count + longmem.count;
+        if (c < 1) {
+            GGML_ASSERT(c > 0);
             return NULL;
-
-        shrinkage = tensor_create(1, 1, c * H * W, 1);
-        CHECK_TENSOR(shrinkage);
-
-        for (int i = 0; i < workmem.count; i++) {
-            s_start = tensor_start_batch(workmem.s, i);
-            d_offset = i * H * W;
-
-            src_point = s_start + s_offset;
-            dst_point = shrinkage->data + d_offset;
-            memcpy(dst_point, src_point, H * W * sizeof(float));
         }
 
-        for (int i = 0; i < longmem.count; i++) {
-            s_start = tensor_start_batch(longmem.s, i);
-            d_offset = (i + workmem.count) * H * W;
+        m_shrinkage = tensor_create(c, 1, H * W, 1);
+        CHECK_TENSOR(m_shrinkage);
 
-            src_point = s_start + s_offset;
-            dst_point = shrinkage->data + d_offset;
-            memcpy(dst_point, src_point, H * W * sizeof(float));
+        n = H * W; // tensor elements
+        if (workmem.count > 0) {
+            s_start = tensor_start_batch(workmem.s, 0);
+            d_start = tensor_start_batch(m_shrinkage, 0);
+            memcpy(d_start, s_start, workmem.count * n * sizeof(float));
         }
 
-        return shrinkage;
+        if (longmem.count > 0) {
+            s_start = tensor_start_batch(longmem.s, 0);
+            d_start = tensor_start_batch(m_shrinkage, workmem.count);
+            memcpy(d_start, s_start, longmem.count * n * sizeof(float));
+        }
+
+        return m_shrinkage;
     }
 
 
     TENSOR *get_value() {
-        TENSOR *value;
-        float *src_point, *dst_point, *s_start;
-        int s_offset, d_offset;
+        int c, n;
+        TENSOR *m_value;
+        float *s_start, *d_start;
 
-        int c = workmem.count + longmem.count;
-        if (c < 1)
+        c = workmem.count + longmem.count;
+        if (c < 1) {
+            GGML_ASSERT(c > 0);
             return NULL;
-
-        value = tensor_create(1, 2, 512, c * H * W);
-        CHECK_TENSOR(value);
-        // 1, 2, 512, H*W
-        for (int i = 0; i < workmem.count; i++) {
-            s_start = tensor_start_batch(workmem.v, i);
-            for (int h = 0; h < 1024; h++) {
-                s_offset = h * H * W;
-                d_offset = i * 1024 * (c * H * W) + h * H * W;
-
-                src_point = s_start + s_offset;
-                dst_point = value->data + d_offset;
-                memcpy(dst_point, src_point, H * W * sizeof(float));
-            }
         }
 
-        for (int i = 0; i < longmem.count; i++) {
-            s_start = tensor_start_batch(longmem.v, i);
-            for (int h = 0; h < 1024; h++) {
-                s_offset = h * H * W;
-                d_offset = (i + longmem.count) * 1024 * (c * H * W) + h * H * W;
+        m_value = tensor_create(c, 2, 512, H * W);
+        CHECK_TENSOR(m_value);
+        n = 2 * 512 * H * W; // tensor elements
 
-                src_point = s_start + s_offset;
-                dst_point = value->data + d_offset;
-                memcpy(dst_point, src_point, H * W * sizeof(float));
-            }
+        if (workmem.count > 0) {
+            s_start = tensor_start_batch(workmem.v, 0);
+            d_start = tensor_start_batch(m_value, 0);
+            memcpy(d_start, s_start, workmem.count * n * sizeof(float));
         }
 
-        return value;
+        if (longmem.count > 0) {
+            s_start = tensor_start_batch(longmem.v, 0);
+            d_start = tensor_start_batch(m_value, workmem.count);
+            memcpy(d_start, s_start, longmem.count * n * sizeof(float));
+        }
+
+        return m_value;
     }
 
     // -----------------------------------------------------------------------------------------
@@ -359,8 +432,8 @@ struct VideoXMemNetwork {
     }
 
     // -----------------------------------------------------------------------------------------
-    TENSOR *forward(TENSOR *key, TENSOR *selection) {
-        GGML_ASSERT(sensory != NULL); // MAKE SURE has been created !!!
+    TENSOR *query_value(TENSOR *key, TENSOR *selection) {
+        GGML_ASSERT(sensory != NULL); // MAKE SURE xmem has been created !!!
 
         TENSOR* mem_key = get_key();
         TENSOR* mem_shrinkage = get_shrinkage();
@@ -373,12 +446,74 @@ struct VideoXMemNetwork {
         argv[3] = mem_shrinkage;
         argv[4] = mem_value;
 
+        tensor_debug_show("===> key", key);
+        tensor_debug_show("===> selection", selection);
+        tensor_debug_show("===> mem_key", mem_key);
+        tensor_debug_show("===> mem_shrinkage", mem_shrinkage);
+        tensor_debug_show("===> mem_value", mem_value);
+
+        // Info: ===> key Tensor: 1x64x35x56
+        // min: -2.7878, max: 3.2375, mean: -0.1568
+        // Info: ===> selection Tensor: 1x64x35x56
+        // min: 0.0000, max: 0.9017, mean: 0.4908
+        // Info: ===> mem_key Tensor: 1x1x64x1960
+        // min: -2.7800, max: 3.1985, mean: -0.1570
+        // Info: ===> mem_shrinkage Tensor: 1x1x1960x1
+        // min: 24.1398, max: 45.3815, mean: 32.6919
+        // Info: ===> mem_value Tensor: 1x2x512x1960
+        // min: -11.2847, max: 5.3647, mean: -0.0028
+
+
+        // tensor [q_key] size: [1, 64, 1960], min: -2.80991, max: 3.298451, mean: -0.158671
+        // tensor [q_selection] size: [1, 64, 1960], min: 0.0, max: 0.905321, mean: 0.5004
+        // tensor [mem_key] size: [1, 64, 1960], min: -2.803887, max: 3.253764, mean: -0.159051
+        // tensor [mem_shrinkage] size: [1, 1960, 1], min: 23.295803, max: 45.933445, mean: 32.660492
+        // tensor [mem_value] size: [2, 512, 1960], min: -11.473879, max: 5.339447, mean: -0.008071
+
+        // XMem
         TENSOR *value = net.engine_forward(ARRAY_SIZE(argv), argv);
+        tensor_debug_show("===> value", value);
+        // tensor [similarity] size: [1, 1960, 1960], min: -87.556335, max: -0.000922, mean: -19.917494
+        // tensor [affinity] size: [1, 1960, 1960], min: 0.0, max: 0.983038, mean: 0.00051
+        // tensor [final_value] size: [2, 512, 35, 56], min: -10.663672, max: 5.041441, mean: -0.008074
+
+        printf("-----------------------------------------------------------\n");
+
         // destroy mem_*
         {
             tensor_destroy(mem_key);
             tensor_destroy(mem_shrinkage);
             tensor_destroy(mem_value);
+
+            TENSOR *x;
+            x = net.get_output_tensor((char *)"SIMILARITY");
+            if (tensor_valid(x)) {
+                tensor_debug_show("---- SIMILARITY", x);
+                tensor_destroy(x);
+            }
+
+            x = net.get_output_tensor((char *)"SOFTMAX");
+            if (tensor_valid(x)) {
+                tensor_debug_show("---- SOFTMAX", x);
+                tensor_destroy(x);
+            }
+
+
+            x = net.get_output_tensor((char *)"AFFINITY");
+            if (tensor_valid(x)) {
+                tensor_debug_show("---- AFFINITY", x);
+                tensor_destroy(x);
+            }
+
+            // Info: -------- SIMILARITY Tensor: 1x1x1960x1960
+            // min: -85.5895, max: -0.0011, mean: -20.1732
+            // Info: -------- SOFTMAX Tensor: 1x1x30x1960
+            // min: 0.0000, max: 0.9724, mean: 0.0333
+            // Info: -------- AFFINITY Tensor: 1x1x1960x1960
+            // min: 0.0000, max: 0.9724, mean: 0.0005
+
+            // Info: ===> value Tensor: 2x512x35x56
+            // min: -10.5401, max: 4.8808, mean: -0.0028
         }
 
         return value;
@@ -386,11 +521,7 @@ struct VideoXMemNetwork {
 
     // -----------------------------------------------------------------------------------------
     void exit() {
-        tensor_destroy(sensory);
-        tensor_destroy(lastkey);
-        tensor_destroy(lastval);
-        workmem.destroy();
-        longmem.destroy();
+        // free_cache();
 
         net.stop_engine();
     }

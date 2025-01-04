@@ -15,13 +15,31 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .dinov2 import DinoVisionTransformer
-from spatial_correlation_sampler import SpatialCorrelationSampler
+# from spatial_correlation_sampler import SpatialCorrelationSampler
 
 from . import resnet
 from . import data
 import todos
 
 import pdb
+
+def torch_nn_arange(x):
+    if x.dim() == 2:
+        B, C = x.size()
+        a = torch.arange(x.nelement())/x.nelement()
+        a = a.to(x.device)
+        return a.view(B, C)
+
+    if x.dim() == 3:
+        B, C, HW = x.size()
+        a = torch.arange(x.nelement())/x.nelement()
+        a = a.to(x.device)
+        return a.view(B, C, HW)
+
+    B, C, H, W = x.size()
+    a = torch.arange(x.nelement())/x.nelement()
+    a = a.to(x.device)
+    return a.view(B, C, H, W)
 
 
 class ColorMNet(nn.Module):
@@ -31,14 +49,12 @@ class ColorMNet(nn.Module):
         self.MAX_W = 1024
         self.MAX_TIMES = 112
         # ------------------------------------------------------------------------------
-        # self.value_dim = 512
-        # self.hidden_dim = 64
         self.key_encoder = DINOv2_v6()
         self.key_proj = KeyProjection()
 
         self.value_encoder = ValueEncoder()
         self.short_term_attn = LocalAttention(d_vu=512 * 2, d_att=64, max_dis=7)
-        self.decoder = Decoder()
+        self.decoder = ColorDecoder()
 
         self.load_weights()
         # from ggml_engine import create_network
@@ -100,7 +116,7 @@ class ColorMNet(nn.Module):
         #     tensor [item] size: [1, 256, 140, 224], min: 0.0, max: 6.709424, mean: 0.200673
         # tensor [color_feature] size: [2, 512, 35, 56], min: -9.328125, max: 4.738281, mean: -0.007783
         # tensor [hidden_state] size: [2, 64, 35, 56], min: -1.0, max: 0.999023, mean: -0.009137
-        return  self.decoder(*multi_scale_features, hidden_state, color_feature)
+        return  self.decoder(*multi_scale_features, color_feature, hidden_state)
 
 
 class DINOv2_v6(nn.Module):
@@ -146,9 +162,22 @@ class DINOv2_v6(nn.Module):
         dino_f16 = self.network2(f) # 1/14, 384  ->   interp to 1/16
         # tensor [dino_f16] size: [1, 1536, 35, 56], min: 0.0, max: 10.015625, mean: 0.865097
 
+        # todos.debug.output_var("dino_f16", dino_f16)
+        # todos.debug.output_var("f16", f16)
         g16 = self.fuse1(dino_f16, f16)
+        # todos.debug.output_var("g16==>", g16)
+
+        # todos.debug.output_var("g8", self.upsample2(dino_f16))
+        # todos.debug.output_var("f8", f8)
         g8 = self.fuse2(self.upsample2(dino_f16), f8)
+        # todos.debug.output_var("g8==>", g8)
+
+        # todos.debug.output_var("g4", self.upsample4(dino_f16))
+        # todos.debug.output_var("f4", f4)
         g4 = self.fuse3(self.upsample4(dino_f16), f4)
+        # todos.debug.output_var("g4==>", g4)
+        # print("-" * 80)
+
         # tensor [g16] size: [1, 1024, 35, 56], min: 0.0, max: 2.594945, mean: 0.063114
         # tensor [g8] size: [1, 512, 70, 112], min: 0.0, max: 1.842727, mean: 0.090533
         # tensor [g4] size: [1, 256, 140, 224], min: 0.0, max: 6.625021, mean: 0.200046
@@ -164,6 +193,8 @@ class Segmentor(nn.Module):
         self.bn3 = nn.BatchNorm2d(1536)
 
     def forward(self, x):
+        # x = torch_nn_arange(x)
+
         # tensor [x] size: [1, 3, 560, 896], min: -0.994517, max: 1.0, mean: -0.189531
         tokens = self.backbone(x) #.get_intermediate_layers(x, n=[8, 9, 10, 11], reshape=True) # last n=4 [8, 9, 10, 11]
         # tokens is tuple: len = 4
@@ -172,14 +203,21 @@ class Segmentor(nn.Module):
         #     tensor [item] size: [1, 384, 40, 64], min: -46.128963, max: 40.135544, mean: 0.009809
         #     tensor [item] size: [1, 384, 40, 64], min: -21.549391, max: 19.685974, mean: 0.007802
         f16 = torch.cat(tokens, dim=1)
-        # tensor [f16] size: [1, 1536, 40, 64], min: -64.093712, max: 65.633827, mean: 0.016308
+        # tensor [f16] size: [1, 1536, 40, 64], min: -64.088036, max: 62.895596, mean: 0.022864
+
         f16 = self.conv3(f16)
         f16 = self.bn3(f16)
         f16 = F.relu(f16)
+        # tensor [f16] size: [1, 1536, 40, 64], min: 0.0, max: 11.556356, mean: 0.868597
+
         old_size = (f16.shape[2], f16.shape[3])
         new_size = (int(old_size[0]*14/16), int(old_size[1]*14/16))
         f16 = F.interpolate(f16, size=new_size, mode='bilinear', align_corners=False) # scale_factor=3.5
-        # tensor [f16] size: [1, 1536, 35, 56], min: 0.0, max: 10.015625, mean: 0.865097
+        # tensor [f16] size: [1, 1536, 35, 56], min: 0.0, max: 11.285922, mean: 0.868653
+
+        # todos.debug.output_var("Segmentor", f16)
+        # print("-" * 80)
+
         return f16
 
 
@@ -248,9 +286,13 @@ class KeyProjection(nn.Module):
         self.e_proj = nn.Conv2d(in_dim, key_dim, kernel_size=3, padding=1)
 
     def forward(self, x):
+        # tensor [x] size: [1, 1024, 35, 56], min: 0.0, max: 2.623592, mean: 0.064568
         key = self.key_proj(x)
         shrinkage = self.d_proj(x)**2 + 1
         selection = torch.sigmoid(self.e_proj(x))
+        # tensor [key] size: [1, 64, 35, 56], min: -2.803887, max: 3.253764, mean: -0.159051
+        # tensor [shrinkage] size: [1, 1, 35, 56], min: 23.295803, max: 45.933445, mean: 32.660492
+        # tensor [selection] size: [1, 64, 35, 56], min: 0.0, max: 0.902618, mean: 0.500047
         return key, shrinkage, selection
 
 # ----------------------------------------
@@ -275,7 +317,6 @@ class FeatureFusionBlock(nn.Module):
 
 # ----------------------------------------
 class HiddenReinforcer(nn.Module):
-    # Used in the value encoder, a single GRU
     def __init__(self):
         super().__init__()
         g_dim = 512
@@ -304,7 +345,6 @@ class DWConv2d(nn.Module):
     def __init__(self, indim):
         super().__init__()
         self.conv = nn.Conv2d(indim, indim, 5, dilation=1, padding=2, groups=indim, bias=False)
-        # self.dropout = nn.Dropout2d(p=dropout, inplace=True)
 
     def forward(self, x, size_2d):
         # tensor [x] size: [1960, 1, 1024], min: -9.280723, max: 4.028006, mean: -0.008225
@@ -317,6 +357,74 @@ class DWConv2d(nn.Module):
         x = x.view(bs, c, h * w).permute(2, 0, 1) # [1, 1024, 1960] ==> [1960, 1, 1024]
         # tensor [x] size: [1960, 1, 1024], min: -6.485817, max: 5.726138, mean: -0.003478
         return x
+
+# https://github.com/hhcaz/correlation-layer-taichi/blob/main/corr_pure_torch.py
+class CorrTorch(nn.Module):
+    def __init__(self, patch_size):
+        super().__init__()
+        self.patch_size = patch_size
+
+        max_disp = patch_size//2
+        pad_l = pad_t = pad_r = pad_b = max_disp
+        self.pad_size = (pad_l, pad_r, pad_t, pad_b)
+
+        # meshgrid_need_index = "indexing" in inspect.getfullargspec(torch.meshgrid).kwonlyargs
+        # meshgrid_kwargs = {"indexing": "ij"} if meshgrid_need_index else {}
+        # oy, ox = torch.meshgrid(
+        #     torch.arange(0, patch_size) * dilation, 
+        #     torch.arange(0, patch_size) * dilation, 
+        #     **meshgrid_kwargs
+        # )
+
+        oy, ox = torch.meshgrid(
+            torch.arange(0, patch_size), 
+            torch.arange(0, patch_size), 
+            indexing = "ij"
+        )
+
+        # (Pdb) oy
+        # tensor([[ 0,  0,  0,  ...,  0,  0,  0],
+        #         [ 1,  1,  1,  ...,  1,  1,  1],
+        #         [ 2,  2,  2,  ...,  2,  2,  2],
+        #         ...,
+        #         [12, 12, 12,  ..., 12, 12, 12],
+        #         [13, 13, 13,  ..., 13, 13, 13],
+        #         [14, 14, 14,  ..., 14, 14, 14]])
+        # (Pdb) ox
+        # tensor([[ 0,  1,  2,  ..., 12, 13, 14],
+        #         [ 0,  1,  2,  ..., 12, 13, 14],
+        #         [ 0,  1,  2,  ..., 12, 13, 14],
+        #         ...,
+        #         [ 0,  1,  2,  ..., 12, 13, 14],
+        #         [ 0,  1,  2,  ..., 12, 13, 14],
+        #         [ 0,  1,  2,  ..., 12, 13, 14]])
+
+        oy = oy.flatten()
+        ox = ox.flatten()
+        self.register_buffer("oy", oy, persistent=False)
+        self.register_buffer("ox", ox, persistent=False)
+        # self.oy -- size() -- 225, tensor([ 0,  0,  0,  ..., 14, 14, 14])
+        # self.ox -- size() -- 225, tensor([ 0,  1,  2,  ..., 12, 13, 14])
+    
+    # @property
+    # def out_channels(self):
+    #     return self.patch_size ** 2
+
+    def forward(self, fmap0, fmap1):
+        fmap1_pad = F.pad(fmap1, self.pad_size, "constant", 0.0)
+        _, _, H, W = fmap0.size()
+        # corr = [torch.sum(fmap0 * fmap1_pad[:, :, oyi:oyi+H, oxi:oxi+W], 
+        #                   dim=1, keepdim=True) for oxi, oyi in zip(self.ox, self.oy)]
+        corr = []
+        for oxi, oyi in zip(self.ox, self.oy):
+            out = torch.sum(fmap0 * fmap1_pad[:, :, oyi : oyi + H, oxi : oxi+W], dim=1, keepdim=True)
+            # tensor [out] size: [1, 1, 35, 56], min: 0.0, max: 4.754177, mean: 2.697444
+            corr.append(out)
+        corr = torch.cat(corr, dim=1)
+        # tensor [corr2] size: [1, 225, 35, 56], min: 0.0, max: 5.768151, mean: 3.323745
+
+        return corr
+
 
 class LocalAttention(nn.Module):
     '''LocalGatedPropagation'''
@@ -331,80 +439,77 @@ class LocalAttention(nn.Module):
         self.d_att = d_att
         assert self.d_att == 64
 
-        self.relative_emb_k = nn.Conv2d(self.d_att, self.window_size * self.window_size, kernel_size=1)
+        self.relative_emb_k = nn.Conv2d(d_att, self.window_size * self.window_size, kernel_size=1)
         # self.relative_emb_k -- Conv2d(64, 225, kernel_size=(1, 1), stride=(1, 1))
 
         # xxxx_debug
-        self.correlation_sampler = SpatialCorrelationSampler(
-            kernel_size=1,
-            patch_size=self.window_size, # 15
-            stride=1, padding=0, dilation=1, dilation_patch=1)
+        # self.correlation_sampler = SpatialCorrelationSampler(
+        #     kernel_size=1,
+        #     patch_size=self.window_size, # 15
+        #     stride=1, padding=0, dilation=1, dilation_patch=1)
+        self.corr = CorrTorch(patch_size = 15)
 
         self.dw_conv = DWConv2d(d_vu)
         self.projection = nn.Linear(d_vu, d_vu)
-        # self.dropout = nn.Dropout(dropout)
+
 
         self.local_mask = None
 
     def forward(self, q, k, v):
         # tensor [q] size: [1, 64, 35, 56], min: -2.75, max: 3.162109, mean: -0.143807
         # tensor [k] size: [1, 64, 35, 56], min: -2.755859, max: 3.140625, mean: -0.143588
-        # tensor [v] size: [1, 1024, 35, 56], min: -9.921875, max: 5.101562, mean: -0.014141
+        # tensor [v] size: [2, 512, 35, 56], min: -9.921875, max: 5.101562, mean: -0.014141
         # --------------------------------------------------------------------------------
         B, C, H, W = v.size()
-        v = v.view(1, 1024, H, W)
-
-        assert q.size()[2:] == k.size()[2:]
-        # assert q.size()[2:] == v.size()[2:]
-
-        relative_emb = self.relative_emb_k(q)
-        relative_emb = relative_emb.view(1, self.window_size * self.window_size, H * W)
-
         # Scale
         q = q / (self.d_att**0.5) # 8
-        assert q.size() == q.view(-1, self.d_att, H, W).size()
-        q = q.view(-1, self.d_att, H, W)
-
-        assert k.size() == k.view(-1, self.d_att, H, W).size()
-        k = k.view(-1, self.d_att, H, W).contiguous()
-        v = v.view(-1, 1, value_dim, H * W)
         
         # tensor [q] size: [1, 64, 35, 56], min: -0.342285, max: 0.398682, mean: -0.017892
         # tensor [k] size: [1, 64, 35, 56], min: -2.755859, max: 3.140625, mean: -0.143588
         # tensor [qk] size: [15, 15, 35, 56], min: 0.0, max: 5.730469, mean: 3.024395
         # --------------------------------------------------------------------------------
-        qk = self.correlation_sampler(q, k).view(1, self.window_size * self.window_size, H * W)
+        # qk = self.correlation_sampler(q, k).view(1, self.window_size * self.window_size, H * W)
+        qk = self.corr(q, k).view(1, self.window_size * self.window_size, H * W)
         # qk.size() -- [1, 225, 1960], 1960 == 35 * 56
+        # tensor [qk] size: [1, 225, 1960], min: 0.0, max: 5.768151, mean: 3.323745
 
+        relative_emb = self.relative_emb_k(q)
+        relative_emb = relative_emb.view(1, self.window_size * self.window_size, H * W)
         qk = qk + relative_emb
-        # local_attn = torch.softmax(qk, dim=2)
+        # tensor [qk] size: [1, 225, 1960], min: -0.646284, max: 6.405645, mean: 3.097403
+
         local_attn = torch.softmax(qk, dim=1)
+        # tensor [local_attn] size: [1, 225, 1960], min: 3.9e-05, max: 0.060623, mean: 0.004444
 
-        # tensor [local_attn] size: [1, 1, 225, 1960], min: 0.0, max: 0.519583, mean: 0.004444
+        # tensor [local_attn] size: [1, 225, 1960], min: 0.0, max: 0.511266, mean: 0.004444
         global_attn = self.local2global(local_attn, H, W)
-        # tensor [global_attn] size: [1, 1, 1960, 1960], min: 0.0, max: 0.519583, mean: 0.00051
+        # tensor [global_attn] size: [1, 1960, 1960], min: 0.0, max: 0.511266, mean: 0.00051
 
-        agg_value = (global_attn @ v.transpose(-2, -1)).permute(2, 0, 1, 3).reshape(H * W, 1, -1)
+        v = v.view(-1, 1, self.value_dim, H * W)
+        # tensor [v] size: [1, 1, 1024, 1960], min: -11.473879, max: 5.339447, mean: -0.008071
+        # tensor [global_attn] size: [1, 1960, 1960], min: 0.0, max: 0.060623, mean: 0.000508
+        agg_value = (global_attn @ v.transpose(-2, -1))
+        # tensor [agg_value] size: [1, 1, 1960, 1024], min: -5.614281, max: 2.84555, mean: -0.008132
+
+        agg_value = agg_value.permute(2, 0, 1, 3)
+        # tensor [agg_value] size: [1960, 1, 1, 1024], min: -5.614281, max: 2.84555, mean: -0.008132
+
+        agg_value = agg_value.reshape(H * W, 1, -1)
+        # tensor [agg_value] size: [1960, 1, 1024], min: -5.614281, max: 2.84555, mean: -0.008132
+
         output = self.dw_conv(agg_value, (H, W))
         output = self.projection(output)
-
         # tensor [output] size: [1960, 1, 1024], min: -2.011719, max: 1.611328, mean: 0.004996
-        # ==> [2, 512, 35, 56]
+        # ==> [1, 1024, 1960] ==> [2, 512, 35, 56]
 
-        # batch, num_objects, value_dim, h, w = self.last_ti_value.shape
-        # last_ti_value = self.last_ti_value.flatten(start_dim=1, end_dim=2)
-        # # tensor [key] size: [1, 64, 35, 56], min: -2.75, max: 3.166016, mean: -0.143513
-        # # tensor [self.last_ti_key] size: [1, 64, 35, 56], min: -2.753906, max: 3.142578, mean: -0.143365
-        # # tensor [last_ti_value] size: [1, 1024, 35, 56], min: -9.9375, max: 5.101562, mean: -0.014165
-        # memory_value_short = self.network.short_term_attn(key, self.last_ti_key, last_ti_value)
-        # # tensor [memory_value_short] size: [1960, 1, 1024], min: -2.007812, max: 1.608398, mean: 0.005006
-
-        # memory_value_short = memory_value_short.permute(1, 2, 0).view(batch, num_objects, value_dim, h, w)
         output = output.permute(1, 2, 0).view(2, 512, H, W)
         return output # ==> [2, 512, 35, 56]
 
     def local2global(self, local_attn, height, width):
-        # tensor [local_attn] size: [1, 1, 225, 1960], min: 0.0, max: 0.519583, mean: 0.004444
+        # tensor [local_attn] size: [1, 225, 1960], min: 0.0, max: 0.538082, mean: 0.004444
+        # [height] value: '35'
+        # [width] value: '56'
+
         B = local_attn.size()[0]
 
         pad_height = height + 2 * self.max_dis
@@ -434,28 +539,43 @@ class LocalAttention(nn.Module):
             # tensor [qy] size: [35, 56], min: 0.0, max: 34.0, mean: 17.0
             # tensor [qx] size: [35, 56], min: 0.0, max: 55.0, mean: 27.499998
 
+            # qy.reshape(-1, 1).size() -- [1960, 1]
+            # ky.reshape(1, -1).size() -- [1, 3430]
             offset_y = qy.reshape(-1, 1) - ky.reshape(1, -1) + self.max_dis
             offset_x = qx.reshape(-1, 1) - kx.reshape(1, -1) + self.max_dis
             # tensor [offset_y] size: [1960, 3430], min: -41.0, max: 41.0, mean: 0.0
             # tensor [offset_x] size: [1960, 3430], min: -62.0, max: 62.0, mean: 0.0
             local_mask = (offset_y.abs() <= self.max_dis) & (offset_x.abs() <= self.max_dis)
-            local_mask = local_mask.view(1, height * width, pad_height, pad_width)
+            local_mask = local_mask.view(1, height * width, pad_height, pad_width) # (1, 1960, 49, 70)
             self.local_mask = local_mask
 
-        # tensor [local_mask] size: [1, 1960, 49, 70], min: 0.0, max: 1.0, mean: 0.065598
+        # torch.set_printoptions(threshold=10_000)
+        # H2 = height
+        # W2 = width
+        # HP2 = pad_height
+        # WP2 = pad_width
+        # D2 = self.max_dis
+        # local_mask3 = torch.zeros(H2*W2, HP2 * WP2).to(torch.bool)
+        # for i in range(H2*W2):
+        #     for j in range(HP2 * WP2):
+        #         y_t = i//W2 -j//WP2 + D2
+        #         x_t = i%W2 - j%WP2 + D2
+        #         local_mask3[i, j] = abs(y_t) <= D2 and abs(x_t) <= D2
+        # local_mask3 = local_mask3.view(1, H2 * W2, HP2, WP2)
+        # todos.debug.output_var("|local_mask3 - local_mask|", (local_mask3.float() - local_mask.cpu().float()).abs())
+
         global_attn = torch.zeros((B, height * width, pad_height, pad_width), device=local_attn.device)
         # global_attn.size() -- [1, 1960, 49, 70]
 
         # local_mask.size() -- torch.Size([1, 1960, 49, 70])
-        # (Pdb) local_attn.size() -- [1, 1, 225, 1960]
-        # (Pdb) local_attn.transpose(-1, -2).size() -- [1, 1, 1960, 225]
-        # local_attn.transpose(-1, -2).reshape(-1).size() -- [441000]
+        # ===> local_mask.float().sum() -- 441000
+
+        # (Pdb) local_attn.transpose(-1, -2).reshape(-1.size() --> [1, 1, 1960, 225] -->  [441000]
         # local_mask.expand(B, -1, -1, -1).size() -- [1, 1960, 49, 70]
-        # 1960*49*70 -- 6722800
         global_attn[local_mask.expand(B, -1, -1, -1)] = local_attn.transpose(-1, -2).reshape(-1)
         global_attn = global_attn[:, :, self.max_dis:-self.max_dis, self.max_dis:-self.max_dis].reshape(B, height * width, height * width)
         # tensor [global_attn] size: [1, 1, 1960, 1960], min: 0.0, max: 0.519583, mean: 0.00051
-        # ==>  # tensor [global_attn] size: [1, 1960, 1960], min: 0.0, max: 0.519583, mean: 0.000508
+        # tensor [global_attn] size: [1, 1960, 1960], min: 0.0, max: 0.538082, mean: 0.00051
 
         return global_attn #[1, 1960, 1960]
 
@@ -522,8 +642,12 @@ class ChannelGate(nn.Module):
             else:
                 channel_att_sum = channel_att_sum + channel_att_raw
 
+        # tensor [channel_att_sum] size: [2, 512], min: -4.608468, max: 2.956863, mean: -0.669225
         scale = torch.sigmoid(channel_att_sum).unsqueeze(2).unsqueeze(3).expand_as(x)
-        return x * scale
+        x = x * scale
+        # tensor [x_out] size: [2, 512, 35, 56], min: -5.115581, max: 2.511071, mean: -0.022023
+
+        return x
 
 class ChannelPool(nn.Module):
     def forward(self, x):
@@ -558,7 +682,7 @@ class CBAM(nn.Module):
         x_out = self.SpatialGate(x_out)
         return x_out
 
-class Decoder(nn.Module):
+class ColorDecoder(nn.Module):
     def __init__(self):
         super().__init__()
         value_dim = 512
@@ -569,7 +693,13 @@ class Decoder(nn.Module):
         self.up_8_4 = UpsampleBlock(256, 256)
         self.pred = nn.Conv2d(256, 1, kernel_size=3, padding=1, stride=1)
 
-    def forward(self, f16, f8, f4, hidden_state, color_feature):
+    def forward(self, f16, f8, f4, color_feature, hidden_state):
+        todos.debug.output_var("ColorDecoder f16", f16)
+        todos.debug.output_var("ColorDecoder f8", f8)
+        todos.debug.output_var("ColorDecoder f4", f4)
+        todos.debug.output_var("ColorDecoder color_feature", color_feature)
+        todos.debug.output_var("ColorDecoder hidden_state", hidden_state)
+
         g16 = self.fuser(f16, torch.cat([color_feature, hidden_state], dim=1))
         # tensor [g16] size: [2, 512, 35, 56], min: -89.383621, max: 14.023798, mean: -1.546733
 
@@ -578,16 +708,19 @@ class Decoder(nn.Module):
         # tensor [g4] size: [2, 256, 140, 224], min: -34.172653, max: 25.263411, mean: -7.309633
 
         logits = self.pred(F.relu(g4))
-        g4 = torch.cat([g4, logits], 1)
-        hidden_state = self.hidden_update([g16, g8, g4], hidden_state)
+        # g4 = torch.cat([g4, logits], 1)
+        # hidden_state = self.hidden_update([g16, g8, g4], hidden_state)
         # tensor [hidden_state] size: [2, 64, 35, 56], min: -0.999481, max: 0.999002, mean: -0.085589
         
         logits = F.interpolate(logits, scale_factor=4, mode='bilinear', align_corners=False)
         logits = logits.permute(1, 0, 2, 3).contiguous() # (C, B, H, W) --> (B, C, H, W)
         # tensor [logits] size: [1, 2, 560, 896], min: -0.472656, max: 0.702148, mean: 0.024722
-        predict_color_ab = torch.tanh(logits)
+        color_ab = torch.tanh(logits)
+        todos.debug.output_var("ColorDecoder color_ab", color_ab)
+        print("=" * 80)
 
-        return hidden_state, predict_color_ab
+        # return hidden_state, color_ab
+        return color_ab
 
 class HiddenUpdater(nn.Module):
     def __init__(self):
@@ -609,7 +742,10 @@ class HiddenUpdater(nn.Module):
             self.g8_conv(F.interpolate(g[1], scale_factor=0.5, mode='area', align_corners=None)) + \
             self.g4_conv(F.interpolate(g[2], scale_factor=0.25, mode='area', align_corners=None))
 
+        todos.debug.output_var("g", g)
+        todos.debug.output_var("h", h)
         g = torch.cat([g, h], dim=1)
+        todos.debug.output_var("ggg", g)
 
         # defined slightly differently than standard GRU, 
         # namely the new value is generated before the forget gate.
@@ -624,6 +760,9 @@ class HiddenUpdater(nn.Module):
 
         new_h = forget_gate*h*(1-update_gate) + update_gate*new_value
         # tensor [new_h] size: [2, 64, 35, 56], min: -3.057797, max: 3.071628, mean: 0.050769
+
+        todos.debug.output_var("new_h", new_h)
+        print("-" * 80)
 
         return new_h
 

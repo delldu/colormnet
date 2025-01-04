@@ -51,7 +51,6 @@ class PatchEmbed(nn.Module):
         x = self.proj(x)  # B C H W
         x = x.flatten(2).transpose(1, 2)  # B HW C
         # x = self.norm(x)
-
         return x
 
 
@@ -72,16 +71,22 @@ class Attention(nn.Module):
         B, N, C = x.shape
         # tensor [x] size: [1, 2561, 384], min: -7.700042, max: 5.273503, mean: 0.004173
 
-        # xxxx_debug
+        ## tensor [qkv(x)] size: [1, 2561, 1152], min: -11.863246, max: 11.457247, mean: 0.032135
+        # qkv2 = self.qkv(x).reshape(B, N, 3*self.num_heads, C//self.num_heads)
+        # q2 = qkv2[:, :, 0:self.num_heads, :] * self.scale
+        # q2 = q2.permute(0, 2, 1, 3)  # [1, 6, 2561, 64] --> [1, 2561, 6, 64]
+        # k2 = qkv2[:, :, self.num_heads:2*self.num_heads, :]
+        # k2 = k2.permute(0, 2, 1, 3)  # [1, 6, 2561, 64] --> [1, 2561, 6, 64]
+        # v2 = qkv2[:, :, 2*self.num_heads:3*self.num_heads, :]
+        # v2 = v2.permute(0, 2, 1, 3) # [1, 6, 2561, 64] --> [1, 2561, 6, 64]
+
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         # tensor [qkv] size: [3, 1, 6, 2561, 64], min: -11.863246, max: 11.457247, mean: 0.03211
-
         q, k, v = qkv[0] * self.scale, qkv[1], qkv[2]
 
         # tensor [k] size: [1, 6, 2561, 64], min: -11.863246, max: 11.457247, mean: 0.10765
         attn = q @ k.transpose(-2, -1)
         # tensor [attn] size: [1, 6, 2561, 2561], min: 0.342996, max: 53.578362, mean: 20.544596
-
         attn = attn.softmax(dim=-1)
 
         # tensor [attn@v] size: [1, 6, 2561, 64], min: -1.033432, max: 1.115259, mean: -0.009298
@@ -159,6 +164,7 @@ class DinoVisionTransformer(nn.Module):
         super().__init__()
         self.num_tokens = 1
         self.patch_size = patch_size
+        self.embed_dim = embed_dim
 
         self.patch_embed = PatchEmbed(img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
         num_patches = self.patch_embed.num_patches # 1369
@@ -170,111 +176,67 @@ class DinoVisionTransformer(nn.Module):
         blocks_list = [ NestedTensorBlock(dim=embed_dim, num_heads=num_heads) for i in range(depth) ]
         self.blocks = nn.ModuleList(blocks_list)
         self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
-        self.mask_token = nn.Parameter(torch.zeros(1, embed_dim))
+        self.mask_token = nn.Parameter(torch.zeros(1, embed_dim)) # !!! useless !!!
 
+    def interpolate_pos_encoding(self, x, H, W):
+        # x.size() -- [1, 2561, 384], H -- 560, W -- 896
+        B, NP, D = x.size()
+        assert D == self.embed_dim
 
-    def interpolate_pos_encoding(self, x, w, h):
-        # x.size() -- [1, 2561, 384]
-        # w = 560
-        # h = 896
-        previous_dtype = x.dtype
-        npatch = x.shape[1] - 1
         N = self.pos_embed.shape[1] - 1
-
-        if npatch == N and w == h: # False
+        if N == NP - 1 and W == H:
             return self.pos_embed
+
         pos_embed = self.pos_embed.float() # [1, 1370, 384]
         class_pos_embed = pos_embed[:, 0:1]
         patch_pos_embed = pos_embed[:, 1:]
 
-        dim = x.shape[2]
-        w0 = w // self.patch_size
-        h0 = h // self.patch_size
         M = int(math.sqrt(N))  # Recover the number of patches in each dimension
         assert N == M * M
-        # Historical kludge: add a small number to avoid floating point error in the interpolation, see https://github.com/facebookresearch/dino/issues/8
-        # Note: still needed for backward-compatibility, the underlying operators are using both output size and scale factors
-        sx = float(w0 + 0.1) / M
-        sy = float(h0 + 0.1) / M
+        NH = (H + self.patch_size - 1) // self.patch_size
+        NW = (W + self.patch_size - 1) // self.patch_size
 
         # tensor [patch_pos_embed] size: [1, 1369, 384], min: -0.1611, max: 0.126807, mean: 8.3e-05
-        patch_pos_embed = F.interpolate(
-            patch_pos_embed.reshape(1, M, M, dim).permute(0, 3, 1, 2), # (1, M, M, dim) -- (1, 37, 37, 384)
-            mode="bicubic",
-            antialias=False,
-            scale_factor=(sx, sy)
-        )
-        assert (w0, h0) == patch_pos_embed.shape[-2:] #  (w0, h0) -- (40, 64)
-        # tensor [patch_pos_embed] size: [1, 384, 40, 64], min: -0.162149, max: 0.127178, mean: 8.2e-05
+        patch_pos_embed = patch_pos_embed.reshape(1, M, M, D)  # (1, M, M, D) -- (1, 37, 37, 384)
+        patch_pos_embed = patch_pos_embed.permute(0, 3, 1, 2) # [1. 37, 37, 384] --> [1, 384, 37, 37]
 
-        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
+        patch_pos_embed = F.interpolate(patch_pos_embed, size=(NH, NW), mode="bicubic", antialias=False)
+        # tensor [patch_pos_embed] size: [1, 384, 40, 64], min: -0.162149, max: 0.127178, mean: 8.2e-05
+        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, D)
         # tensor [patch_pos_embed] size: [1, 2560, 384], min: -0.162149, max: 0.127178, mean: 8.2e-05
 
         # class_pos_embed.size() -- [1, 384]
-        return torch.cat((class_pos_embed, patch_pos_embed), dim=1).to(previous_dtype)
+        return torch.cat((class_pos_embed, patch_pos_embed), dim=1).to(x.dtype)
 
-    def prepare_tokens_with_masks(self, x):
-        B, nc, w, h = x.shape
+    def forward(self, x):
+        # tensor [x] size: [1, 3, 560, 896], min: -0.495599, max: 0.496816, mean: -0.109927
+        B, C, H, W = x.shape
+
         x = self.patch_embed(x)
-        x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
-        x = x + self.interpolate_pos_encoding(x, w, h)
+        # tensor [x] size: [1, 2560, 384], min: -0.818547, max: 0.587891, mean: -0.002679
 
-        return x
+        x = torch.cat((self.cls_token.expand(B, 1, -1), x), dim=1)
+        # tensor [x] size: [1, 2561, 384], min: -0.818547, max: 0.587891, mean: -0.002678
 
-    def _get_intermediate_layers_not_chunked(self, x, n=1):
-        x = self.prepare_tokens_with_masks(x)
-        output = []
-        total_block_len = len(self.blocks)
-        # total_block_len === 12
-        # If n is an int, take the n last blocks. If it's a list, take them
-        blocks_to_take = range(total_block_len - n, total_block_len) if isinstance(n, int) else n
-        # ==> blocks_to_take === n === [8, 9, 10, 11]
+        x = x + self.interpolate_pos_encoding(x, H, W)
+
+        NH = (H + self.patch_size - 1) // self.patch_size
+        NW = (W + self.patch_size - 1) // self.patch_size
+
+        outputs = []
         for i, blk in enumerate(self.blocks):
             x = blk(x)
-            if i in blocks_to_take:
-                output.append(x)
-        assert len(output) == len(blocks_to_take), f"only {len(output)} / {len(blocks_to_take)} blocks found"
-        return output
+            if i in [8, 9, 10, 11]:
+                out = self.norm(x)  # [1, 2561, 384]
+                out = out[:, 1:, :] # [1, 2560, 384]
+                # w // self.patch_size, h // self.patch_size === 40, 64
+                out = out.reshape(B, NH, NW, -1).permute(0, 3, 1, 2).contiguous()
+                # [1, 40, 60, 384] --> [1, 384, 40, 64]
+                outputs.append(out)
 
-    def get_intermediate_layers(self, x, n = 1):
-        # n = [8, 9, 10, 11]
-        # reshape = True
-        # norm = True
-        # assert self.chunked_blocks == False
-        outputs = self._get_intermediate_layers_not_chunked(x, n)
-        # outputs is list: len = 4
-        #     tensor [item] size: [1, 2561, 384], min: -1.436012, max: 3.993176, mean: 0.010676
-        #     tensor [item] size: [1, 2561, 384], min: -2.636683, max: 12.582134, mean: 0.008854
-        #     tensor [item] size: [1, 2561, 384], min: -5.218596, max: 17.576105, mean: 0.007495
-        #     tensor [item] size: [1, 2561, 384], min: -9.620348, max: 7.396965, mean: 0.037324
-
-        outputs = [self.norm(out) for out in outputs]
-
-        class_tokens = [out[:, 0] for out in outputs]
-        outputs = [out[:, 1:] for out in outputs]
-        # class_tokens is list: len = 4
-        #     tensor [item] size: [1, 384], min: -15.180793, max: 9.944782, mean: -0.147217
-        #     tensor [item] size: [1, 384], min: -6.410425, max: 10.536849, mean: -0.15464
-        #     tensor [item] size: [1, 384], min: -5.574806, max: 9.573328, mean: -0.130884
-        #     tensor [item] size: [1, 384], min: -8.222178, max: 5.906737, mean: -0.022716
-        # outputs is list: len = 4
-        #     tensor [item] size: [1, 2560, 384], min: -64.29377, max: 62.932507, mean: 0.046734
-        #     tensor [item] size: [1, 2560, 384], min: -58.107525, max: 53.356197, mean: 0.016807
-        #     tensor [item] size: [1, 2560, 384], min: -48.493, max: 43.823879, mean: 0.01582
-        #     tensor [item] size: [1, 2560, 384], min: -22.330799, max: 15.610704, mean: 0.011709
-
-        B, _, w, h = x.shape
-        outputs = [
-            out.reshape(B, w // self.patch_size, h // self.patch_size, -1).permute(0, 3, 1, 2).contiguous()
-            for out in outputs
-        ]
-        # w // self.patch_size, h // self.patch_size === 40, 64
         # outputs is list: len = 4
         #     tensor [item] size: [1, 384, 40, 64], min: -64.29377, max: 62.932507, mean: 0.046734
         #     tensor [item] size: [1, 384, 40, 64], min: -58.107525, max: 53.356197, mean: 0.016807
         #     tensor [item] size: [1, 384, 40, 64], min: -48.493, max: 43.823879, mean: 0.01582
         #     tensor [item] size: [1, 384, 40, 64], min: -22.330799, max: 15.610704, mean: 0.011709
-        return tuple(outputs)
-
-    def forward(self, x):
-        return self.get_intermediate_layers(x, n=[8, 9, 10, 11])
+        return outputs

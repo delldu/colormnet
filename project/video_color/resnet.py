@@ -17,6 +17,25 @@ import pdb
 #     'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
 # }
 
+def torch_nn_arange(x):
+    if x.dim() == 2:
+        B, C = x.size()
+        a = torch.arange(x.nelement())/x.nelement()
+        a = a.to(x.device)
+        return a.view(B, C)
+
+    if x.dim() == 3:
+        B, C, HW = x.size()
+        a = torch.arange(x.nelement())/x.nelement()
+        a = a.to(x.device)
+        return a.view(B, C, HW)
+
+    B, C, H, W = x.size()
+    a = torch.arange(x.nelement())/x.nelement()
+    a = a.to(x.device)
+    return a.view(B, C, H, W)
+
+
 def conv3x3(in_planes, out_planes, stride=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                      padding=1, dilation=1, bias=False)
@@ -95,6 +114,7 @@ class Bottleneck(nn.Module):
                 nn.BatchNorm2d(planes * self.expansion))
 
     def forward(self, x):
+        # x = torch_nn_arange(x)
         residual = x
 
         out = self.conv1(x)
@@ -111,8 +131,13 @@ class Bottleneck(nn.Module):
         if self.downsample is not None:
             residual = self.downsample(x)
 
+        # tensor [out] size: [1, 256, 140, 224], min: -0.594325, max: 0.780308, mean: 0.012659
+        # tensor [residual] size: [1, 256, 140, 224], min: -0.548443, max: 0.556349, mean: 0.061899
         out += residual
         out = self.relu(out)
+
+        # todos.debug.output_var("Bottleneck", out)
+        # print("-" * 80)
 
         return out
 
@@ -180,7 +205,9 @@ class LayerNormFunction(torch.autograd.Function):
         var = (x - mu).pow(2).mean(1, keepdim=True)
         y = (x - mu) / (var + eps).sqrt()
         ctx.save_for_backward(y, var, weight)
+
         y = weight.view(1, C, 1, 1) * y + bias.view(1, C, 1, 1)
+        # tensor [xxx] size: [1, 1024, 35, 56], min: -1.562801, max: 1.547557, mean: -0.003717
         return y
 
     @staticmethod
@@ -205,7 +232,8 @@ class LayerNorm2d(nn.Module):
         self.eps = eps
 
     def forward(self, x):
-        return LayerNormFunction.apply(x, self.weight, self.bias, self.eps)
+        out = LayerNormFunction.apply(x, self.weight, self.bias, self.eps)
+        return out;
     
 class CrossChannelAttention(nn.Module):
     def __init__(self, dim, heads=8):
@@ -229,27 +257,60 @@ class CrossChannelAttention(nn.Module):
         )
 
     def forward(self, encoder, decoder):
+        # encoder = torch_nn_arange(encoder)
+        # decoder = torch_nn_arange(decoder)
+
         b, c, h, w = encoder.shape
 
-        q = self.to_q_dw(self.to_q(encoder))
+        # todos.debug.output_var("encoder", encoder)
+        # todos.debug.output_var("decoder", decoder)
 
+
+        q = self.to_q_dw(self.to_q(encoder))
         k = self.to_k_dw(self.to_k(decoder))
         v = self.to_v_dw(self.to_v(decoder))
         # xxxx_debug
+
+        # [1, 2048, 35, 56] --> [1, 2048, HW] --> [1, 8, 256, HW]
+        # q2 = q.view(b, -1, h*w).view(b, self.heads, -1, h*w)
+        # k2 = k.view(b, -1, h*w).view(b, self.heads, -1, h*w)
+        # v2 = v.view(b, -1, h*w).view(b, self.heads, -1, h*w)
+
+        # tensor [q1] size: [1, 2048, 35, 56], min: -0.950127, max: 1.107969, mean: 0.006086
+        # tensor [k1] size: [1, 2048, 35, 56], min: -3.406554, max: 3.649786, mean: -0.084804
+        # tensor [v1] size: [1, 2048, 35, 56], min: -8.682275, max: 10.331948, mean: 0.076861
+        # --------------------------------------------------------------------------------
         q = rearrange(q, 'b (head c) h w -> b head c (h w)', head=self.heads)
         k = rearrange(k, 'b (head c) h w -> b head c (h w)', head=self.heads)
         v = rearrange(v, 'b (head c) h w -> b head c (h w)', head=self.heads)
+        # tensor [q2] size: [1, 8, 256, 1960], min: -0.950127, max: 1.107969, mean: 0.006086
+        # tensor [k2] size: [1, 8, 256, 1960], min: -3.406554, max: 3.649786, mean: -0.084804
+        # tensor [v2] size: [1, 8, 256, 1960], min: -8.682275, max: 10.331948, mean: 0.076861
+        # todos.debug.output_var("|q - q2|", (q - q2).abs())
+        # todos.debug.output_var("|k - k2|", (k - k2).abs())
+        # todos.debug.output_var("|v - v2|", (v - v2).abs())
 
         q = F.normalize(q, dim=-1)
         k = F.normalize(k, dim=-1)
 
         attn = (q @ k.transpose(-2, -1)) * self.temperature
         attn = attn.softmax(dim=-1)
-
         out = (attn @ v)
-        out = rearrange(out, 'b head c (h w) -> b (head c) h w', head=self.heads, h=h, w=w)
 
-        return self.to_out(out)
+        # out2 = out.view(b, -1, h*w).view(b, -1, h, w)
+        # tensor [out1] size: [1, 8, 256, 1960], min: -0.91977, max: 1.421521, mean: 0.080392
+        out = rearrange(out, 'b head c (h w) -> b (head c) h w', head=self.heads, h=h, w=w)
+        # tensor [out2] size: [1, 2048, 35, 56], min: -0.91977, max: 1.421521, mean: 0.080392
+        # todos.debug.output_var("|out - out2|", (out - out2).abs())
+
+        # todos.debug.output_var("out", self.to_out(out))
+        # print("-" * 80)
+
+        out = self.to_out(out)
+        # todos.debug.output_var("CrossChannelAttention", out)
+        # print("-" * 80)
+
+        return out
 
 class Fuse(nn.Module):
     def __init__(self, in_feat, out_feat):
@@ -267,9 +328,22 @@ class Fuse(nn.Module):
         res = enc
         enc = self.norm1(enc)
         dec = self.norm2(dec)
+
+        # todos.debug.output_var("enc", enc)
+        # todos.debug.output_var("dec", dec)
+
+        # tensor [enc] size: [1, 1024, 35, 56], min: -11.505666, max: 2.44047, mean: 0.000167
+        # tensor [dec] size: [1, 1024, 35, 56], min: -0.646519, max: 10.31074, mean: 0.000101
         output = self.crossattn(enc, dec) + res
+        # tensor [output] size: [1, 1024, 35, 56], min: -318.123413, max: 70.843498, mean: 9.195792
+        # todos.debug.output_var("output1", output)
 
         output = self.norm3(output)
         output = self.relu3(output)
+        # tensor [output] size: [1, 1024, 35, 56], min: 0.0, max: 2.623592, mean: 0.064568
+
+        # todos.debug.output_var("output2", output)
+        # print("-" * 80)
 
         return output
+

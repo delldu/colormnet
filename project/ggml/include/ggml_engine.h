@@ -495,7 +495,7 @@ struct ggml_cgraph* GGMLNetwork::m_build_graph(int argc, ggml_tensor_t* argv[])
     if (m_ggml_engine.graph_cpu_buffer == NULL) {
         m_ggml_engine.graph_cpu_buffer = malloc(buf_size);
     }
-#else    
+#else
     m_ggml_engine.graph_cpu_buffer = realloc(m_ggml_engine.graph_cpu_buffer, buf_size);
 #endif
 
@@ -640,7 +640,7 @@ TENSOR* GGMLNetwork::engine_forward(int argc, TENSOR* argv[])
             }
 
             struct ggml_init_params params = {
-                /*.mem_size   =*/ggml_tensor_overhead() * MAX_INPUT_TENSORS,
+                /*.mem_size   =*/ ggml_tensor_overhead() * MAX_INPUT_TENSORS,
                 /*.mem_buffer =*/NULL,
                 /*.no_alloc   =*/true, // the tensors will not be allocated later
             };
@@ -865,6 +865,8 @@ int set_tensor_value(ggml_tensor_t* tensor, TENSOR* nt) // , bool to_backend = f
     }
 
     // 2) Convert nt->data to tensor->data
+    CheckPoint("nb = %ld", nb);
+
     void* dst_data = (void*)malloc(nb);
     check_point(dst_data != NULL);
     if (tensor->type == GGML_TYPE_F16) {

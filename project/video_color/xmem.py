@@ -8,38 +8,41 @@ import pdb
 
 
 def get_similarity(mem_key, mem_shrinkage, query_key, query_selection):
+    # tensor [mem_key] size: [1, 64, 1960], min: -2.803887, max: 3.253764, mean: -0.159051
+    # tensor [mem_shrinkage] size: [1, 1960, 1], min: 23.295803, max: 45.933445, mean: 32.660492
+    # tensor [query_key] size: [1, 64, 1960], min: -2.80991, max: 3.298451, mean: -0.158671
+    # tensor [query_selection] size: [1, 64, 1960], min: 0.0, max: 0.905321, mean: 0.5004
+
     CK = mem_key.shape[1] # 64
 
     mem_key = mem_key.transpose(1, 2)
     a_sq = (mem_key.pow(2) @ query_selection)
-    # tensor [a_sq] size: [1, 3920, 1960], min: 5.804688, max: 25.171875, mean: 13.989838
+    # tensor [a_sq] size: [1, 1960, 1960], min: 5.804688, max: 25.171875, mean: 13.989838
 
     two_ab = 2 * (mem_key @ (query_key * query_selection))
-    # tensor [two_ab] size: [1, 3920, 1960], min: 6.933594, max: 44.0, mean: 22.547285
+    # tensor [two_ab] size: [1, 1960, 1960], min: 6.933594, max: 44.0, mean: 22.547285
 
     b_sq = (query_selection * query_key.pow(2)).sum(1, keepdim=True)
     # tensor [b_sq] size: [1, 1, 1960], min: 7.427909, max: 22.625141, mean: 14.256322
 
     similarity = (-a_sq + two_ab - b_sq)
-    # tensor [similarity] size: [1, 3920, 1960], min: -22.395203, max: 0.004377, mean: -5.698874
-
-    # tensor [mem_shrinkage] size: [1, 3920, 1], min: 15.327408, max: 42.592422, mean: 31.011293
     similarity = similarity * mem_shrinkage / math.sqrt(CK)   # B*N*HW
-    # todos.debug.output_var("similarity", similarity)
+    # tensor [similarity] size: [1, 1960, 1960], min: -87.556335, max: -0.000922, mean: -19.917494
 
     return similarity
 
 def do_softmax(similarity, top_k):
-    # tensor [similarity] size: [1, 3920, 1960], min: -87.945297, max: 0.012002, mean: -21.991934
+    # xxxx_debug
+
+    # tensor [similarity] size: [1, 1960, 1960], min: -87.945297, max: 0.012002, mean: -21.991934
     values, indices = torch.topk(similarity, k=top_k, dim=1)
-    # values.size() -- [1, 30, 1960]
     # tensor [values] size: [1, 30, 1960], min: -9.706834, max: 0.012002, mean: -3.975312
     x_exp = values.exp_()
     x_exp /= torch.sum(x_exp, dim=1, keepdim=True)
     #  x_exp.size() -- [1, 30, 1960]
 
     affinity = torch.zeros_like(similarity).scatter_(1, indices, x_exp) # B*N*HW
-    # tensor [affinity] size: [1, 3920, 1960], min: 0.0, max: 0.442188, mean: 0.000255
+    # tensor [affinity] size: [1, 1960, 1960], min: 0.0, max: 0.442188, mean: 0.000255
     return affinity
 
 class XMemCache():
@@ -95,6 +98,9 @@ class XMem(nn.Module):
         self.workmem = XMemCache(device, H, W, WORK_SIZE)    # Short-Term, working Memory
         self.longmem = XMemCache(device, H, W, LONG_SIZE)    # Long-Term Memory
 
+        # from ggml_engine import create_network
+        # create_network(self)
+
     def set_hidden(self, h):
         assert h.size() == self.sensory.size()
         self.sensory = h
@@ -144,11 +150,26 @@ class XMem(nn.Module):
         mem_shrinkage = self._get_shringage()
         mem_value = self._get_value()
 
-        similarity = get_similarity(mem_key, mem_shrinkage, q_key, q_selection)
-        affinity = do_softmax(similarity, self.TOP_K)
-        final_value = mem_value @ affinity
+        todos.debug.output_var("q_key", q_key)
+        todos.debug.output_var("q_selection", q_selection)
+        todos.debug.output_var("mem_key", mem_key)
+        todos.debug.output_var("mem_shrinkage", mem_shrinkage)
+        todos.debug.output_var("mem_value", mem_value)
 
-        return final_value.view(2, 512, self.H, self.W)
+
+        # 9800 === 5*HW
+        similarity = get_similarity(mem_key, mem_shrinkage, q_key, q_selection)
+        todos.debug.output_var("similarity", similarity)
+
+        affinity = do_softmax(similarity, self.TOP_K)
+        todos.debug.output_var("affinity", affinity)
+
+        final_value = mem_value @ affinity
+        final_value = final_value.view(2, 512, self.H, self.W)
+        todos.debug.output_var("final_value", final_value)
+        print("-" * 80)
+
+        return final_value
 
     def forward(self, q_key, q_selection):
         return self.get_value(q_key, q_selection)
