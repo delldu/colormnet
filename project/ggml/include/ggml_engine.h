@@ -865,8 +865,6 @@ int set_tensor_value(ggml_tensor_t* tensor, TENSOR* nt) // , bool to_backend = f
     }
 
     // 2) Convert nt->data to tensor->data
-    CheckPoint("nb = %ld", nb);
-
     void* dst_data = (void*)malloc(nb);
     check_point(dst_data != NULL);
     if (tensor->type == GGML_TYPE_F16) {

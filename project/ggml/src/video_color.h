@@ -56,18 +56,6 @@ struct GroupResBlock {
         conv2.setup_weight_names(s);
     }
 
-
-    // def forward(self, g):
-    //     # tensor [g] size: [2, 1280, 35, 56], min: 0.0, max: 27.27334, mean: 0.346497
-    //     out_g = self.conv1(F.relu(g))
-    //     out_g = self.conv2(F.relu(out_g))
-        
-    //     if self.downsample is not None:
-    //         g = self.downsample(g)
-
-    //     return out_g + g
-
-
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* g) {
         ggml_tensor_t *out_g;
         out_g = ggml_relu(ctx, g);
@@ -75,27 +63,16 @@ struct GroupResBlock {
         out_g = ggml_relu(ctx, out_g);
         out_g = conv2.forward(ctx, out_g);
 
-        // CheckPoint("------------- GroupResBlock");
-        // ggml_tensor_dump("out_g", out_g);
         if (in_dim != out_dim) {
-            // ggml_tensor_dump("g1", g);
             // g    f32 [56, 35, 1600, 2], 
             g = downsample.forward(ctx, g);
-            // ggml_tensor_dump("g2", g);
             // g    f32 [56, 35, 512, 2], 
         }
-        //  else {
-        //     ggml_tensor_dump("g3", g);
-        // }
-
         out_g = ggml_add(ctx, out_g, g);
-        // CheckPoint("------------- GroupResBlock OK");
 
         return out_g;
     }
 };
-
-
 
 struct UpsampleBlock {
     int skip_dim = 256;
@@ -129,24 +106,6 @@ struct UpsampleBlock {
         out_conv.setup_weight_names(s);
     }
 
-    // def forward(self, skip_f, up_g):
-    //     # tensor [skip_f] size: [1, 512, 70, 112], min: 0.0, max: 1.505345, mean: 0.09193
-    //     # tensor [up_g] size: [2, 512, 35, 56], min: -89.383621, max: 14.023798, mean: -1.546733
-
-    //     skip_f = self.skip_conv(skip_f)
-    //     g = F.interpolate(up_g, scale_factor=2.0, mode='bilinear', align_corners=False)
-    //     # tensor [skip_f] size: [1, 512, 70, 112], min: -3.976562, max: 2.03125, mean: 0.014867
-    //     # tensor [g] size: [2, 512, 70, 112], min: -84.804108, max: 13.753417, mean: -1.546733
-
-    //     B, C, H, W = g.size()
-    //     g = skip_f.repeat(B, 1, 1, 1) + g
-    //     # tensor [g] size: [2, 512, 70, 112], min: -16.578125, max: 9.945312, mean: -0.034318
-
-    //     g = self.out_conv(g)
-    //     # tensor [g] size: [2, 256, 70, 112], min: -7.59375, max: 18.921875, mean: -0.155025
-
-    //     return g
-
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* skip_f, ggml_tensor_t* up_g) {
         int W = (int)up_g->ne[0];
         int H = (int)up_g->ne[1];
@@ -166,131 +125,119 @@ struct UpsampleBlock {
     }
 };
 
-struct HiddenUpdater {
-    const int hidden_dim = 64;
+// // useless
+// struct HiddenUpdater {
+//     const int hidden_dim = 64;
 
-    struct Conv2d g16_conv;
-    struct Conv2d g8_conv;
-    struct Conv2d g4_conv;
-    struct Conv2d transform;
+//     struct Conv2d g16_conv;
+//     struct Conv2d g8_conv;
+//     struct Conv2d g4_conv;
+//     struct Conv2d transform;
 
-    void create_weight_tensors(struct ggml_context* ctx) {
-        g16_conv.in_channels = 512;
-        g16_conv.out_channels = 256;
-        g16_conv.kernel_size = {1, 1};
-        g16_conv.stride = { 1, 1 };
-        g16_conv.padding = { 0, 0 };
-        g16_conv.create_weight_tensors(ctx);
+//     void create_weight_tensors(struct ggml_context* ctx) {
+//         g16_conv.in_channels = 512;
+//         g16_conv.out_channels = 256;
+//         g16_conv.kernel_size = {1, 1};
+//         g16_conv.stride = { 1, 1 };
+//         g16_conv.padding = { 0, 0 };
+//         g16_conv.create_weight_tensors(ctx);
 
-        g8_conv.in_channels = 256;
-        g8_conv.out_channels = 256;
-        g8_conv.kernel_size = {1, 1};
-        g8_conv.stride = { 1, 1 };
-        g8_conv.padding = { 0, 0 };
-        g8_conv.create_weight_tensors(ctx);
+//         g8_conv.in_channels = 256;
+//         g8_conv.out_channels = 256;
+//         g8_conv.kernel_size = {1, 1};
+//         g8_conv.stride = { 1, 1 };
+//         g8_conv.padding = { 0, 0 };
+//         g8_conv.create_weight_tensors(ctx);
 
-        g4_conv.in_channels = 257;
-        g4_conv.out_channels = 256;
-        g4_conv.kernel_size = {1, 1};
-        g4_conv.stride = { 1, 1 };
-        g4_conv.padding = { 0, 0 };
-        g4_conv.create_weight_tensors(ctx);
+//         g4_conv.in_channels = 257;
+//         g4_conv.out_channels = 256;
+//         g4_conv.kernel_size = {1, 1};
+//         g4_conv.stride = { 1, 1 };
+//         g4_conv.padding = { 0, 0 };
+//         g4_conv.create_weight_tensors(ctx);
 
-        transform.in_channels = 320; // mid_dim + hidden_dim;
-        transform.out_channels =  192; // hidden_dim*3;
-        transform.kernel_size = {3, 3};
-        transform.stride = { 1, 1 };
-        transform.padding = { 1, 1 };
-        transform.create_weight_tensors(ctx);
-    }
+//         transform.in_channels = 320; // mid_dim + hidden_dim;
+//         transform.out_channels =  192; // hidden_dim*3;
+//         transform.kernel_size = {3, 3};
+//         transform.stride = { 1, 1 };
+//         transform.padding = { 1, 1 };
+//         transform.create_weight_tensors(ctx);
+//     }
 
-    void setup_weight_names(const char *prefix) {
-        char s[GGML_MAX_NAME];
+//     void setup_weight_names(const char *prefix) {
+//         char s[GGML_MAX_NAME];
 
-        snprintf(s, sizeof(s), "%s%s", prefix, "g16_conv.");
-        g16_conv.setup_weight_names(s);
+//         snprintf(s, sizeof(s), "%s%s", prefix, "g16_conv.");
+//         g16_conv.setup_weight_names(s);
 
-        snprintf(s, sizeof(s), "%s%s", prefix, "g8_conv.");
-        g8_conv.setup_weight_names(s);
+//         snprintf(s, sizeof(s), "%s%s", prefix, "g8_conv.");
+//         g8_conv.setup_weight_names(s);
 
-        snprintf(s, sizeof(s), "%s%s", prefix, "g4_conv.");
-        g4_conv.setup_weight_names(s);
+//         snprintf(s, sizeof(s), "%s%s", prefix, "g4_conv.");
+//         g4_conv.setup_weight_names(s);
 
-        snprintf(s, sizeof(s), "%s%s", prefix, "transform.");
-        transform.setup_weight_names(s);
-    }
+//         snprintf(s, sizeof(s), "%s%s", prefix, "transform.");
+//         transform.setup_weight_names(s);
+//     }
 
-    ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* g0, ggml_tensor_t* g1, ggml_tensor_t* g2, 
-        ggml_tensor_t* h) {
-        // # g is list: len = 3
-        // #     tensor [item] size: [2, 512, 35, 56], min: -82.737953, max: 16.419943, mean: -1.540743
-        // #     tensor [item] size: [2, 256, 70, 112], min: -27.510799, max: 26.222929, mean: -1.975606
-        // #     tensor [item] size: [2, 257, 140, 224], min: -33.898613, max: 25.28302, mean: -7.281233
-        // # tensor [h] size: [2, 64, 35, 56], min: -3.735293, max: 4.35715, mean: 0.105984
-        // g = self.g16_conv(g[0]) + \
-        //     self.g8_conv(F.interpolate(g[1], scale_factor=0.5, mode='area', align_corners=None)) + \
-        //     self.g4_conv(F.interpolate(g[2], scale_factor=0.25, mode='area', align_corners=None))
+//     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* g0, ggml_tensor_t* g1, ggml_tensor_t* g2, 
+//         ggml_tensor_t* h) {
+//         // # g is list: len = 3
+//         // #     tensor [item] size: [2, 512, 35, 56], min: -82.737953, max: 16.419943, mean: -1.540743
+//         // #     tensor [item] size: [2, 256, 70, 112], min: -27.510799, max: 26.222929, mean: -1.975606
+//         // #     tensor [item] size: [2, 257, 140, 224], min: -33.898613, max: 25.28302, mean: -7.281233
+//         // # tensor [h] size: [2, 64, 35, 56], min: -3.735293, max: 4.35715, mean: 0.105984
 
-        int H, W;
-        ggml_tensor_t *g, *forget_gate, *update_gate, *new_value, *new_h;
-        // CheckPoint("==== HiddenUpdater");
-        // ggml_tensor_dump("==== g0", g0);
-        // ggml_tensor_dump("==== g1", g1);
-        // ggml_tensor_dump("==== g2", g2);
+//         int H, W;
+//         ggml_tensor_t *g, *forget_gate, *update_gate, *new_value, *new_h;
 
-        g0 = g16_conv.forward(ctx, g0);
+//         // g = self.g16_conv(g[0]) + \
+//         //     self.g8_conv(F.interpolate(g[1], scale_factor=0.5, mode='area', align_corners=None)) + \
+//         //     self.g4_conv(F.interpolate(g[2], scale_factor=0.25, mode='area', align_corners=None))
 
-        W = (int)g1->ne[0];
-        H = (int)g1->ne[1];
-        g1 = ggml_interpolate(ctx, g1, 0/*on W*/, W/2);
-        g1 = ggml_interpolate(ctx, g1, 1/*on H*/, H/2);
-        g1 = g8_conv.forward(ctx, g1);
+//         g0 = g16_conv.forward(ctx, g0);
 
-        W = (int)g2->ne[0];
-        H = (int)g2->ne[1];
-        g2 = ggml_interpolate(ctx, g2, 0/*on W*/, W/4);
-        g2 = ggml_interpolate(ctx, g2, 1/*on H*/, H/4);
-        g2 = g4_conv.forward(ctx, g2);
+//         W = (int)g1->ne[0];
+//         H = (int)g1->ne[1];
+//         g1 = ggml_interpolate(ctx, g1, 0/*on W*/, W/2);
+//         g1 = ggml_interpolate(ctx, g1, 1/*on H*/, H/2);
+//         g1 = g8_conv.forward(ctx, g1);
 
-        // CheckPoint("---- HiddenUpdater ?");
-        // ggml_tensor_dump("---- g0", g0);
-        // ggml_tensor_dump("---- g1", g1);
-        // ggml_tensor_dump("---- g2", g2);
+//         W = (int)g2->ne[0];
+//         H = (int)g2->ne[1];
+//         g2 = ggml_interpolate(ctx, g2, 0/*on W*/, W/4);
+//         g2 = ggml_interpolate(ctx, g2, 1/*on H*/, H/4);
+//         g2 = g4_conv.forward(ctx, g2);
 
-        // ---- g0    f32 [56, 35, 256, 2], 
-        // ---- g1    f32 [56, 35, 256, 2], 
-        // ---- g2    f32 [56, 35, 256, 2], 
-        g = ggml_add(ctx, g0, g1);
-        g = ggml_add(ctx, g, g2);
+//         // ---- g0    f32 [56, 35, 256, 2], 
+//         // ---- g1    f32 [56, 35, 256, 2], 
+//         // ---- g2    f32 [56, 35, 256, 2], 
+//         g = ggml_add(ctx, g0, g1);
+//         g = ggml_add(ctx, g, g2);
 
-        // ggml_tensor_dump("******************* g0", g);
-        // # tensor [h] size: [2, 64, 35, 56], min: -3.735293, max: 4.35715, mean: 0.105984
-        g = ggml_concat(ctx, g, h, 2/*dim on channel*/);
+//         // # tensor [h] size: [2, 64, 35, 56], min: -3.735293, max: 4.35715, mean: 0.105984
+//         g = ggml_concat(ctx, g, h, 2/*dim on channel*/);
 
-        // g = torch.cat([g, h], dim=1)
-        // ggml_tensor_dump("******************* g1", g);
-        g = transform.forward(ctx, g);
-        // ggml_tensor_dump("******************* g2", g);
-        // # tensor [g] size: [2, 192, 35, 56], min: -46.875889, max: 65.977158, mean: 4.075093
+//         // g = torch.cat([g, h], dim=1)
+//         g = transform.forward(ctx, g);
+//         // # tensor [g] size: [2, 192, 35, 56], min: -46.875889, max: 65.977158, mean: 4.075093
 
-        // CheckPoint("---- HiddenUpdater OK");
+//         forget_gate = ggml_sigmoid(ctx, ggml_nn_slice(ctx, g, 2/*dim*/, 0, hidden_dim, 1/*step*/));
+//         update_gate = ggml_sigmoid(ctx, ggml_nn_slice(ctx, g, 2/*dim*/, hidden_dim, 2*hidden_dim, 1/*step*/));
+//         new_value = ggml_tanh(ctx, ggml_nn_slice(ctx, g, 2/*dim*/, 2*hidden_dim, 3*hidden_dim, 1/*step*/));
 
-        forget_gate = ggml_sigmoid(ctx, ggml_nn_slice(ctx, g, 2/*dim*/, 0, hidden_dim, 1/*step*/));
-        update_gate = ggml_sigmoid(ctx, ggml_nn_slice(ctx, g, 2/*dim*/, hidden_dim, 2*hidden_dim, 1/*step*/));
-        new_value = ggml_tanh(ctx, ggml_nn_slice(ctx, g, 2/*dim*/, 2*hidden_dim, 3*hidden_dim, 1/*step*/));
+//         g = ggml_dup(ctx, update_gate);
+//         g = ggml_constant(ctx, g, 1.0f);
+//         g = ggml_sub(ctx, g, update_gate);
+//         g = ggml_mul(ctx, h, g);
 
-        g = ggml_dup(ctx, update_gate);
-        g = ggml_constant(ctx, g, 1.0f);
-        g = ggml_sub(ctx, g, update_gate);
-        g = ggml_mul(ctx, h, g);
+//         forget_gate = ggml_mul(ctx, forget_gate, g);
+//         update_gate = ggml_mul(ctx, update_gate, new_value);
 
-        forget_gate = ggml_mul(ctx, forget_gate, g);
-        update_gate = ggml_mul(ctx, update_gate, new_value);
-
-        new_h = ggml_add(ctx, forget_gate, update_gate);
-    	return new_h;
-    }
-};
+//         new_h = ggml_add(ctx, forget_gate, update_gate);
+//     	return new_h;
+//     }
+// };
 
 struct Flatten {
     void create_weight_tensors(struct ggml_context* ctx) {
@@ -340,24 +287,6 @@ struct ChannelGate {
         snprintf(s, sizeof(s), "%s%s", prefix, "mlp.3.");
         mlp_3.setup_weight_names(s);
     }
-
-    // def forward(self, x):
-    //     channel_att_sum = None
-    //     for pool_type in self.pool_types:
-    //         if pool_type=='avg':
-    //             avg_pool = F.avg_pool2d( x, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
-    //             channel_att_raw = self.mlp( avg_pool )
-    //         elif pool_type=='max':
-    //             max_pool = F.max_pool2d( x, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
-    //             channel_att_raw = self.mlp( max_pool )
-
-    //         if channel_att_sum is None:
-    //             channel_att_sum = channel_att_raw
-    //         else:
-    //             channel_att_sum = channel_att_sum + channel_att_raw
-
-    //     scale = torch.sigmoid(channel_att_sum).unsqueeze(2).unsqueeze(3).expand_as(x)
-    //     return x * scale
 
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* x) {
         ggml_tensor_t *avg, *max, *scale;
@@ -463,7 +392,6 @@ struct SpatialGate {
     }
 };
 
-
 struct CBAM {
     int gate_channels = 512;
 
@@ -496,18 +424,6 @@ struct CBAM {
         return x;
     }
 };
-
-// class FeatureFusionBlock(nn.Module):
-//     def __init__(self, g_in_dim):
-//     # def __init__(self):
-//         super().__init__()
-//         x_in_dim = 1024
-//         g_mid_dim = 512
-//         g_out_dim = 512
-//         self.block1 = GroupResBlock(x_in_dim + g_in_dim, g_mid_dim)
-//         self.attention = CBAM(g_mid_dim)
-//         self.block2 = GroupResBlock(g_mid_dim, g_out_dim)
-
 
 struct FeatureFusionBlock {
     int g_in_dim = 512;
@@ -545,39 +461,25 @@ struct FeatureFusionBlock {
     }
 
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* x, ggml_tensor_t* g) {
-        // B, C, H, W = g.size()
-        // g = torch.cat([x.repeat(B, 1, 1, 1), g], dim = 1)
-        // g = self.block1(g)
-        // r = self.attention(g)
-        // g = self.block2(g + r)
-        // return g
+        ggml_tensor_t *r;
         int B = g->ne[3];
         x = ggml_repeat_ext(ctx, x, 1, 1, 1, B);
         g = ggml_concat(ctx, x, g, 2/*dim on Channel*/);
         g = block1.forward(ctx, g);
-        ggml_tensor_t *r;
         r = attention.forward(ctx, g);
-
-        // CheckPoint("-------------------- g + r ?");
-        // ggml_tensor_dump("--------------------g", g);
-        // ggml_tensor_dump("--------------------r", r);
-
         g = ggml_add(ctx, g, r);
-        // CheckPoint("-------------------- g + r OK");
-
         g = block2.forward(ctx, g);
         return g;
     }
 };
 
 struct ColorDecoder : GGMLNetwork {
-    // network hparams
     int val_dim = 512;
     int hidden_dim = 64;
 
     // network params
     struct FeatureFusionBlock fuser;
-    struct HiddenUpdater hidden_update; // useless ...
+    // struct HiddenUpdater hidden_update; // useless ...
     struct UpsampleBlock up_16_8;
     struct UpsampleBlock up_8_4;
     struct Conv2d pred;
@@ -588,7 +490,7 @@ struct ColorDecoder : GGMLNetwork {
         fuser.create_weight_tensors(ctx);
 
         // self.hidden_update = HiddenUpdater([512, 256, 256+1], 256, hidden_dim) 
-        hidden_update.create_weight_tensors(ctx);
+        // hidden_update.create_weight_tensors(ctx);
 
         // self.up_16_8 = UpsampleBlock(512, 512)
         up_16_8.skip_dim = 512;
@@ -615,8 +517,8 @@ struct ColorDecoder : GGMLNetwork {
         snprintf(s, sizeof(s), "%s%s", prefix, "fuser.");
         fuser.setup_weight_names(s);
 
-        snprintf(s, sizeof(s), "%s%s", prefix, "hidden_update.");
-        hidden_update.setup_weight_names(s);
+        // snprintf(s, sizeof(s), "%s%s", prefix, "hidden_update.");
+        // hidden_update.setup_weight_names(s);
 
         snprintf(s, sizeof(s), "%s%s", prefix, "up_16_8.");
         up_16_8.setup_weight_names(s);
@@ -628,27 +530,6 @@ struct ColorDecoder : GGMLNetwork {
         pred.setup_weight_names(s);
     }
 
-
-    // def forward(self, f16, f8, f4, hidden_state, color_feature):
-    //     g16 = self.fuser(f16, torch.cat([color_feature, hidden_state], dim=1))
-    //     # tensor [g16] size: [2, 512, 35, 56], min: -89.383621, max: 14.023798, mean: -1.546733
-
-    //     g8 = self.up_16_8(f8, g16)
-    //     g4 = self.up_8_4(f4, g8)
-    //     # tensor [g4] size: [2, 256, 140, 224], min: -34.172653, max: 25.263411, mean: -7.309633
-
-    //     logits = self.pred(F.relu(g4))
-    //     g4 = torch.cat([g4, logits], 1)
-    //     hidden_state = self.hidden_update([g16, g8, g4], hidden_state)
-    //     # tensor [hidden_state] size: [2, 64, 35, 56], min: -0.999481, max: 0.999002, mean: -0.085589
-        
-    //     logits = F.interpolate(logits, scale_factor=4, mode='bilinear', align_corners=False)
-    //     logits = logits.permute(1, 0, 2, 3).contiguous() # (C, B, H, W) --> (B, C, H, W)
-    //     # tensor [logits] size: [1, 2, 560, 896], min: -0.472656, max: 0.702148, mean: 0.024722
-    //     color_ab = torch.tanh(logits)
-
-    //     return hidden_state, color_ab
-
     ggml_tensor_t* forward(ggml_context_t* ctx, int argc, ggml_tensor_t* argv[]) {
         GGML_ASSERT(argc == 5);
         ggml_tensor_t* f16 = argv[0];
@@ -658,32 +539,19 @@ struct ColorDecoder : GGMLNetwork {
         ggml_tensor_t* hidden_state = argv[4];
 
         ggml_tensor_t *g16, *g8, *g4, *logits, *color_ab;
-        // CheckPoint();
 
         g16 = ggml_concat(ctx, color_feature, hidden_state, 2/*dim on channel*/);
-        // CheckPoint();
-
         g16 = fuser.forward(ctx, f16, g16);
-        // CheckPoint();
-
         g8 = up_16_8.forward(ctx, f8, g16);
-        // CheckPoint();
 
         g4 = up_8_4.forward(ctx, f4, g8);
-        // CheckPoint();
 
         logits = pred.forward(ctx, ggml_relu(ctx, g4));
-        // CheckPoint();
-
-        // g4 = ggml_concat(ctx, g4, logits, 2/*dim on channenl*/);
-        // hidden_state = hidden_update.forward(ctx, g16, g8, g4, hidden_state);
-        // CheckPoint();
 
         int W = (int)logits->ne[0];
         int H = (int)logits->ne[1];
         logits = ggml_interpolate(ctx, logits, 0/*on W*/, 4*W);
         logits = ggml_interpolate(ctx, logits, 1/*on H*/, 4*H);
-        // CheckPoint();
 
         logits = ggml_cont(ctx, ggml_permute(ctx, logits, 0, 1, 3, 2)); // [W, H, B, C] -> [W, H, C, B]
         color_ab = ggml_tanh(ctx, logits);
@@ -691,11 +559,6 @@ struct ColorDecoder : GGMLNetwork {
         return color_ab;
     }
 };
-
-/*
- DWConv2d(
-  (conv): Conv2d(1024, 1024, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2), groups=1024, bias=False)
-) */
 
 struct DWConv2d {
     int indim = 1024;
@@ -721,40 +584,21 @@ struct DWConv2d {
         conv.setup_weight_names(s);
     }
 
-    // def forward(self, x, size_2d):
-    //     # tensor [x] size: [1960, 1, 1024], min: -9.280723, max: 4.028006, mean: -0.008225
-    //     # size_2d -- (35, 36)
-    //     h, w = size_2d
-    //     n, bs, c = x.size() # 1, 1024
-    //     x = x.view(h, w, bs, c).permute(2, 3, 0, 1) # [35, 36, 1, 1024] ==> [1, 1024, 35, 36]
-    //     x = self.conv(x)
-    //     # x = self.dropout(x)
-    //     x = x.view(bs, c, h * w).permute(2, 0, 1) # [1, 1024, 1960] ==> [1960, 1, 1024]
-    //     # tensor [x] size: [1960, 1, 1024], min: -6.485817, max: 5.726138, mean: -0.003478
-    //     return x
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* x, int H, int W) {
         //# tensor [x] size: [1960, 1, 1024], min: -9.280723, max: 4.028006, mean: -0.008225
-        int C = (int)x->ne[0];
+
         int B = (int)x->ne[1];
-        x = ggml_reshape_4d(ctx, x, C, B, W, H);
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3)); // [C, B, W, H] --> [B, C, W, H]
+        int C = (int)x->ne[0]; // 1024
+        // int HW = (int)x->ne[2];
+        x = ggml_reshape_4d(ctx, x, B, C, H, W);
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 3, 2, 1, 0)); // [B, C, H, W] --> [W, H, C, B]
         x = conv.forward(ctx, x); // Depthwise Conv2d
-        x = ggml_reshape_3d(ctx, x, H*W, C, B);
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 2, 0, 1, 3)); // [HW, C, B] -> [C, B, HW]
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 3, 2, 0, 1)); // [W, H, C, B] -> [C, B, H, W]
+        x = ggml_reshape_3d(ctx, x, C, B, H*W);
     	return x;
     }
 };
 
-
-/*
- LocalAttention(
-  (relative_emb_k): Conv2d(64, 225, kernel_size=(1, 1), stride=(1, 1))
-  (correlation_sampler): SpatialCorrelationSampler()
-  (dw_conv): DWConv2d(
-    (conv): Conv2d(1024, 1024, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2), groups=1024, bias=False)
-  )
-  (projection): Linear(in_features=1024, out_features=1024, bias=True)
-) */
 
 struct LocalAttention : GGMLNetwork {
     const int window_size = 15;
@@ -804,6 +648,9 @@ struct LocalAttention : GGMLNetwork {
         ggml_tensor_t* q = argv[0];
         ggml_tensor_t* k = argv[1];
         ggml_tensor_t* v = argv[2];
+        // # tensor [q] size: [1, 64, 35, 56], min: -2.75, max: 3.162109, mean: -0.143807
+        // # tensor [k] size: [1, 64, 35, 56], min: -2.755859, max: 3.140625, mean: -0.143588
+        // # tensor [v] size: [2, 512, 35, 56], min: -9.921875, max: 5.101562, mean: -0.014141
 
         int W = (int)v->ne[0];
         int H = (int)v->ne[1];
@@ -811,17 +658,21 @@ struct LocalAttention : GGMLNetwork {
         int B = (int)v->ne[3];
 
         // # Scale
-        q = ggml_scale(ctx, q, 8.0f); // sqrtf(d_att);
+        q = ggml_scale(ctx, q, 0.125f); // sqrtf(d_att);
 
         ggml_tensor_t *qk = ggml_corr(ctx, q, k, window_size); // [225, 35, 56]
+        // # tensor [qk] size: [15, 15, 35, 56], min: 0.0, max: 5.730469, mean: 3.024395
+
         qk = ggml_reshape_3d(ctx, qk, H*W, window_size * window_size, 1); // [1960, 225, 1]
         ggml_tensor_t *rel_emb = relative_emb_k.forward(ctx, q);
         rel_emb = ggml_reshape_3d(ctx, rel_emb, H * W, window_size * window_size, 1);
         qk = ggml_add(ctx, qk, rel_emb);
+        // # tensor [qk] size: [1, 225, 1960], min: -0.646284, max: 6.405645, mean: 3.097403
 
         ggml_tensor_t *local_attn = ggml_softmax(ctx, qk, 1/*dim*/); // [1960, 225, 1]
-        local_attn = ggml_transpose(ctx, local_attn); // [225, 1960, 1]
+        local_attn = ggml_cont(ctx, ggml_transpose(ctx, local_attn)); // [225, 1960, 1]
         local_attn = ggml_reshape_1d(ctx, local_attn, -1);
+
         ggml_tensor_t *global_attn = ggml_global_attn(ctx, local_attn, H, W, max_dis); // [70x49, 35x56]
 
         // global_attn = global_attn.view(1, H * W, H + 2*MAX_DISP, W + 2*MAX_DISP)
@@ -829,10 +680,14 @@ struct LocalAttention : GGMLNetwork {
         global_attn = ggml_nn_slice(ctx, global_attn, 0/*on W*/, max_dis, W + max_dis, 1/*step*/);
         global_attn = ggml_nn_slice(ctx, global_attn, 1/*on H*/, max_dis, H + max_dis, 1/*step*/);
         global_attn = ggml_reshape_3d(ctx, global_attn, H*W, H*W, 1);
+        // # tensor [global_attn] size: [1, 1960, 1960], min: 0.0, max: 0.511266, mean: 0.00051
 
         v = ggml_reshape_4d(ctx, v, H*W, 2*hidden_dim, 1, -1);
-        v = ggml_transpose(ctx, v);
+        // # tensor [v] size: [1, 1, 1024, 1960], min: -11.473879, max: 5.339447, mean: -0.008071
+
+        v = ggml_cont(ctx, ggml_transpose(ctx, v));
         ggml_tensor_t *agg_value = ggml_nn_mul_mat(ctx, global_attn, v); // [512, HW, 1]
+
         // tensor [agg_value] size: [1, 1, 1960, 1024], min: -5.614281, max: 2.84555, mean: -0.008132
         agg_value = ggml_cont(ctx, ggml_permute(ctx, agg_value, 0, 3, 1, 2)); // [1024, 1960, 1, 1] -> [1024, 1, 1, 1960]
         // tensor [agg_value] size: [1960, 1, 1, 1024], min: -5.614281, max: 2.84555, mean: -0.008132
@@ -840,17 +695,14 @@ struct LocalAttention : GGMLNetwork {
         // tensor [agg_value] size: [1960, 1, 1024], min: -5.614281, max: 2.84555, mean: -0.008132
 
         ggml_tensor_t *output = dw_conv.forward(ctx, agg_value, H, W);
+
         output = projection.forward(ctx, output);
         output = ggml_cont(ctx, ggml_permute(ctx, output, 1, 2, 0, 3)); // [1024, 1, 1960] -->[1960, 1024, 1]
         output = ggml_reshape_4d(ctx, output, W, H, hidden_dim, 2);
-        return output;
+
+        return output; // [56, 35, 512, 2]
     }
 };
-
-/*
- HiddenReinforcer(
-  (transform): Conv2d(576, 192, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-) */
 
 struct HiddenReinforcer {
     int g_dim = 512;
@@ -874,20 +726,6 @@ struct HiddenReinforcer {
         transform.setup_weight_names(s);
     }
 
-    // def forward(self, g, h):
-    //     # tensor [g] size: [2, 512, 35, 56], min: -28.850132, max: 14.702946, mean: -0.759376
-    //     # tensor [h] size: [2, 64, 35, 56], min: -4.463562, max: 4.321184, mean: 0.000787
-
-    //     g = torch.cat([g, h], dim=1)
-    //     # tensor [g] size: [2, 576, 35, 56], min: -28.850132, max: 14.702946, mean: -0.674914
-    //     values = self.transform(g)
-    //     forget_gate = torch.sigmoid(values[:, :self.hidden_dim])
-    //     update_gate = torch.sigmoid(values[:, self.hidden_dim:self.hidden_dim*2])
-    //     new_value = torch.tanh(values[:, self.hidden_dim*2:])
-
-    //     new_h = forget_gate*h*(1-update_gate) + update_gate*new_value
-    //     # tensor [new_h] size: [2, 64, 35, 56], min: -3.942453, max: 3.99185, mean: 0.111976
-    //     return new_h
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* g, ggml_tensor_t* h) {
         ggml_tensor_t *forget_gate, *update_gate, *new_h, *t;
         g = ggml_concat(ctx, g, h, 2/*dim on C*/);
@@ -911,15 +749,6 @@ struct HiddenReinforcer {
     }
 };
 
-/*
- BasicBlock(
-  (conv1): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
-  (bn1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-  (relu): ReLU(inplace=True)
-  (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
-  (bn2): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-) */
-
 struct BasicBlock {
     int inplanes;
     int planes;
@@ -940,10 +769,6 @@ struct BasicBlock {
     void create_weight_tensors(struct ggml_context* ctx) {
         // self.conv1 = conv3x3(inplanes, planes, stride=stride)
         // self.bn1 = nn.BatchNorm2d(planes)
-
-        // def conv3x3(in_planes, out_planes, stride=1):
-        //     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-        //              padding=1, dilation=1, bias=False)
 
         conv1.in_channels = inplanes;
         conv1.out_channels = planes;
@@ -1014,17 +839,6 @@ struct BasicBlock {
     }
 
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* x) {
-        // residual = x
-        // out = self.conv1(x)
-        // out = self.bn1(out)
-        // out = self.relu(out)
-        // out = self.conv2(out)
-        // out = self.bn2(out)
-        // if self.downsample is not None:
-        //     residual = self.downsample(x)
-        // out += residual
-        // out = self.relu(out)
-        // return out
         ggml_tensor_t *residual = x;
         if (downsample) {
             residual = downsample_conv.forward(ctx, x);
@@ -1073,12 +887,10 @@ struct BasicBlockLayer {
     void setup_weight_names(const char *prefix) {
         char s[GGML_MAX_NAME];
 
-        // snprintf(s, sizeof(s), "%s%s", prefix, "layer.0.");
         snprintf(s, sizeof(s), "%s%s", prefix, "0.");
         layers[0].setup_weight_names(s);
 
         for (int i = 1; i < blocks; i++) {
-            // snprintf(s, sizeof(s), "%slayer.%d.", prefix, i);
             snprintf(s, sizeof(s), "%s%d.", prefix, i);
             layers[i].setup_weight_names(s);
         }
@@ -1092,25 +904,6 @@ struct BasicBlockLayer {
         return x;
     }
 };
-
-// def __init__(self, value_dim, hidden_dim):
-//     super().__init__()
-//     assert value_dim == 512
-
-//     # network = resnet.resnet18()
-//     # self.conv1 = network.conv1
-//     # self.bn1 = network.bn1
-//     # self.maxpool = network.maxpool
-//     # self.layer1 = network.layer1 # 1/4, 64
-//     # self.layer2 = network.layer2 # 1/8, 128
-//     # self.layer3 = network.layer3 # 1/16, 256
-
-//     self.conv1 = nn.Conv2d(3 + 2, 64, kernel_size=7, stride=2, padding=3, bias=False)
-//     self.bn1 = nn.BatchNorm2d(64)
-//     self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-//     self.layer1 = resnet.make_basicblock_layer(64, 64, 2, stride=1)
-//     self.layer2 = resnet.make_basicblock_layer(64, 128, 2, stride=2)
-//     self.layer3 = resnet.make_basicblock_layer(128, 256, 2, stride=2)
 
 
 struct ValueEncoder : GGMLNetwork {
@@ -1198,40 +991,6 @@ struct ValueEncoder : GGMLNetwork {
         hidden_reinforce.setup_weight_names(s);
     }
 
-    // def forward(self, image, f16, h16, ref_ab):
-    //     # tensor [image] size: [1, 3, 560, 896], min: -5.011174, max: 5.030801, mean: 0.000676
-    //     # tensor [f16] size: [1, 1024, 35, 56], min: 0.0, max: 2.263417, mean: 0.06662
-    //     # tensor [h16] size: [2, 64, 35, 56], min: -4.67093, max: 4.75749, mean: 0.000638
-    //     # tensor [ref_ab] size: [1, 2, 560, 896], min: -4.593725, max: 4.704186, mean: -0.002239
-    //     s0 = ref_ab[:, 0:1, :, :]
-    //     s1 = ref_ab[:, 1:2, :, :]
-    //     ref_ba = torch.cat([s1, s0], dim = 1)
-    //     # tensor [ref_ba] size: [1, 2, 560, 896], min: -4.593725, max: 4.704186, mean: -0.002239
-
-    //     g = torch.cat([ref_ab, ref_ba], dim=0)
-    //     B, C, H, W = g.size()
-    //     g = torch.cat([image.repeat(B, 1, 1, 1), g], dim=1)
-
-    //     g = self.conv1(g)
-    //     g = self.bn1(g)     # 1/2, 64
-    //     g = self.maxpool(g) # 1/4, 64
-    //     g = F.relu(g) 
-
-    //     g = self.layer1(g) # 1/4
-    //     g = self.layer2(g) # 1/8
-    //     g = self.layer3(g) # 1/16
-
-    //     # handle dim problem raised by vit
-    //     g = F.interpolate(g, f16.shape[2:], mode='bilinear', align_corners=False)
-
-    //     g = self.fuser(f16, g)
-
-    //     # tensor [g] size: [2, 512, 35, 56], min: -28.850132, max: 14.702946, mean: -0.759376
-    //     # tensor [h16] size: [2, 64, 35, 56], min: -4.463562, max: 4.321184, mean: 0.000787
-    //     h = self.hidden_reinforce(g, h16)
-    //     # tensor [h] size: [2, 64, 35, 56], min: -4.807474, max: 4.858111, mean: 0.004066
-
-    //     return g, h
     ggml_tensor_t* forward(ggml_context_t* ctx, int argc, ggml_tensor_t* argv[]) {
         GGML_ASSERT(argc == 4);
         ggml_tensor_t* image = argv[0]; // image_lll
@@ -1267,13 +1026,11 @@ struct ValueEncoder : GGMLNetwork {
         g = ggml_interpolate(ctx, g, 1/*on H*/, H);
         g = fuser.forward(ctx, f16, g);
         h = hidden_reinforce.forward(ctx, g, h16);
-
-        // Save h
+        // Save g, h
         {
             g = ggml_cont(ctx, g);
             ggml_set_name(g, "VALUE");
             ggml_set_output(g);
-
 
             h = ggml_cont(ctx, h);
             ggml_set_name(h, "HIDDEN");
@@ -1283,13 +1040,6 @@ struct ValueEncoder : GGMLNetwork {
         return ggml_package(ctx, 2, g, h);
     }
 };
-
-/*
- KeyProjection(
-  (key_proj): Conv2d(1024, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-  (d_proj): Conv2d(1024, 1, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-  (e_proj): Conv2d(1024, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-) */
 
 struct KeyProjection {
     // network params
@@ -1333,7 +1083,6 @@ struct KeyProjection {
         e_proj.setup_weight_names(s);                
     }
 
-    // std::vector<ggml_tensor_t *> forward(struct ggml_context* ctx, ggml_tensor_t* x) {
     ggml_tensor_t * forward(struct ggml_context* ctx, ggml_tensor_t* x) {
         // key = self.key_proj(x)
         // shrinkage = self.d_proj(x)**2 + 1
@@ -1346,7 +1095,6 @@ struct KeyProjection {
         shrinkage = ggml_add_constant(ctx, shrinkage, 1.0);
         ggml_tensor_t *selection = e_proj.forward(ctx, x);
         selection = ggml_sigmoid(ctx, selection);
-
         // Save shrinkage, selection
         {
             key = ggml_cont(ctx, key);
@@ -1366,18 +1114,6 @@ struct KeyProjection {
     }
 };
 
-/*
- CrossChannelAttention(
-  (to_q): Conv2d(256, 512, kernel_size=(1, 1), stride=(1, 1))
-  (to_q_dw): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=512)
-  (to_k): Conv2d(256, 512, kernel_size=(1, 1), stride=(1, 1))
-  (to_k_dw): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=512)
-  (to_v): Conv2d(256, 512, kernel_size=(1, 1), stride=(1, 1))
-  (to_v_dw): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), groups=512)
-  (to_out): Sequential(
-    (0): Conv2d(512, 256, kernel_size=(1, 1), stride=(1, 1))
-  )
-) */
 // --------------------------------------------------------------------------------------------------
 struct CrossChannelAttention {
     int dim = 256;
@@ -1483,7 +1219,6 @@ struct CrossChannelAttention {
 
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* encoder, ggml_tensor_t* decoder) {
         ggml_tensor_t *q, *k, *v, *attn, *out;
-
         int W = (int)encoder->ne[0];
         int H = (int)encoder->ne[1];
         int C = (int)encoder->ne[2];
@@ -1500,13 +1235,10 @@ struct CrossChannelAttention {
         // # tensor [v] size: [1, 2048, 35, 56], min: -8.682275, max: 10.331948, mean: 0.076861
         // q = ggml_reshape_3d(ctx, q, H*W, -1, B);
         q = ggml_reshape_4d(ctx, q, H*W, -1, heads, B);
-
         // k = ggml_reshape_3d(ctx, k, H*W, -1, B);
         k = ggml_reshape_4d(ctx, k, H*W, -1, heads, B);
-
         // v = ggml_reshape_3d(ctx, v, H*W, -1, B);
         v = ggml_reshape_4d(ctx, v, H*W, -1, heads, B);
-
         // # tensor [q] size: [1, 8, 256, 1960], min: -0.950127, max: 1.107969, mean: 0.006086
         // # tensor [k] size: [1, 8, 256, 1960], min: -3.406554, max: 3.649786, mean: -0.084804
         // # tensor [v] size: [1, 8, 256, 1960], min: -8.682275, max: 10.331948, mean: 0.076861
@@ -1531,22 +1263,6 @@ struct CrossChannelAttention {
 
         out = to_out.forward(ctx, out);
         // # tensor [out1] size: [1, 8, 256, 1960], min: -0.91977, max: 1.421521, mean: 0.080392
-
-        // // xxxx_debug
-        // {
-        //     out = ggml_cont(ctx, out);
-        //     ggml_set_name(out, "CrossChannelAttention");
-        //     ggml_set_output(out);
-
-        //     // Info: -------- CrossChannelAttention Tensor: 1x256x140x224
-        //     // min: -1.4498, max: 1.2746, mean: 0.0462
-
-        //     // tensor [CrossChannelAttention] size: [1, 1024, 35, 56], min: -1.535051, max: 1.180782, mean: 0.005319
-        //     // --------------------------------------------------------------------------------
-        //     // tensor [CrossChannelAttention] size: [1, 512, 70, 112], min: -0.900384, max: 0.757689, mean: -0.014827
-        //     // --------------------------------------------------------------------------------
-        //     // tensor [CrossChannelAttention] size: [1, 256, 140, 224], min: -1.379045, max: 1.267273, mean: 0.045151
-        // }
 
         return out;
     }
@@ -1648,7 +1364,6 @@ struct Fuse {
         enc = encode_enc.forward(ctx, enc);
         res = enc;
         enc = norm1.forward(ctx, enc);
-
         dec = norm2.forward(ctx, dec);
         // # tensor [enc] size: [1, 1024, 35, 56], min: -11.505666, max: 2.44047, mean: 0.000167
         // # tensor [dec] size: [1, 1024, 35, 56], min: -0.646519, max: 10.31074, mean: 0.000101
@@ -1663,17 +1378,6 @@ struct Fuse {
         // tensor [dec] size: [1, 1024, 35, 56], min: -0.646519, max: 10.31074, mean: 0.000101
         // tensor [output1] size: [1, 1024, 35, 56], min: -318.123413, max: 70.843498, mean: 9.195792
         // tensor [output2] size: [1, 1024, 35, 56], min: 0.0, max: 2.623592, mean: 0.064568
-        // --------------------------------------------------------------------------------
-        // tensor [enc] size: [1, 512, 70, 112], min: -17.924768, max: 1.833576, mean: 0.006252
-        // tensor [dec] size: [1, 512, 70, 112], min: -0.731976, max: 10.055672, mean: -0.002289
-        // tensor [output1] size: [1, 512, 70, 112], min: -183.597137, max: 22.961906, mean: 10.433863
-        // tensor [output2] size: [1, 512, 70, 112], min: 0.0, max: 1.733069, mean: 0.093956
-        // --------------------------------------------------------------------------------
-        // tensor [enc] size: [1, 256, 140, 224], min: -6.512808, max: 6.359758, mean: 0.000327
-        // tensor [dec] size: [1, 256, 140, 224], min: -1.407278, max: 6.204899, mean: -0.003733
-        // tensor [output1] size: [1, 256, 140, 224], min: -63.444809, max: 66.866364, mean: 4.369734
-        // tensor [output2] size: [1, 256, 140, 224], min: 0.0, max: 6.521586, mean: 0.203084
-        // --------------------------------------------------------------------------------
 
     	return output;
     }
@@ -1711,10 +1415,6 @@ struct Mlp {
     }
 
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* x) {
-        // x = self.fc1(x)
-        // x = self.act(x)
-        // x = self.fc2(x)
-        // return x
         x = fc1.forward(ctx, x);
         x = ggml_gelu(ctx, x);
         x = fc2.forward(ctx, x);
@@ -1741,12 +1441,6 @@ struct LayerScale {
         return ggml_mul(ctx, x, gamma);
     }
 };
-
-/*
- Attention(
-  (qkv): Linear(in_features=384, out_features=1152, bias=True)
-  (proj): Linear(in_features=384, out_features=384, bias=True)
-) */
 
 struct Attention {
     int dim = 384;
@@ -1780,35 +1474,30 @@ struct Attention {
     }
 
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* x) {
+        ggml_tensor_t *q, *k, *v, *attn;
+
+        // # tensor [x] size: [1, 2561, 384], min: -7.700042, max: 5.273503, mean: 0.004173
         int C = (int)x->ne[0]; // 384
         int N = (int)x->ne[1]; // 2561
         int B = (int)x->ne[2];
-        // # tensor [x] size: [1, 2561, 384], min: -7.700042, max: 5.273503, mean: 0.004173
 
         x = qkv.forward(ctx, x);
         // # tensor [x] size: [1, 2561, 1152], min: -11.863246, max: 11.457247, mean: 0.032135
         x = ggml_reshape_4d(ctx, x, C/num_heads, 3*num_heads, N, B);
-        ggml_tensor_t *q = ggml_nn_slice(ctx, x, 1, 0*num_heads, 1*num_heads, 1/*step*/);
+        q = ggml_nn_slice(ctx, x, 1, 0*num_heads, 1*num_heads, 1/*step*/);
         q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3)); // [64, 2561, 6, 1] --> [64, 6, 2561, 1]
         q = ggml_scale(ctx, q, scale);
-        ggml_tensor_t *k = ggml_nn_slice(ctx, x, 1, 1*num_heads, 2*num_heads, 1/*step*/);
+        k = ggml_nn_slice(ctx, x, 1, 1*num_heads, 2*num_heads, 1/*step*/);
         k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3)); // [64, 2561, 6, 1] --> [64, 6, 2561, 1]
-        ggml_tensor_t *v = ggml_nn_slice(ctx, x, 1, 2*num_heads, 3*num_heads, 1/*step*/);
+        v = ggml_nn_slice(ctx, x, 1, 2*num_heads, 3*num_heads, 1/*step*/);
         v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3)); // [64, 2561, 6, 1] --> [64, 6, 2561, 1]
 
-        // # tensor [k] size: [1, 6, 2561, 64], min: -11.863246, max: 11.457247, mean: 0.10765
-        // attn = q @ k.transpose(-2, -1)
-        // # tensor [attn] size: [1, 6, 2561, 2561], min: 0.342996, max: 53.578362, mean: 20.544596
-        // attn = attn.softmax(dim=-1)
-
-        // # tensor [attn@v] size: [1, 6, 2561, 64], min: -1.033432, max: 1.115259, mean: -0.009298
-        // x = (attn @ v).transpose(1, 2).reshape(B, N, C)
-        // x = self.proj(x)
-        // return x # [1, 2561, 384] ???
         k = ggml_transpose(ctx, k);
-        ggml_tensor_t *attn = ggml_nn_mul_mat(ctx, q, k);
+        attn = ggml_nn_mul_mat(ctx, q, k);
+
         attn = ggml_softmax(ctx, attn, 0/*dim*/);
         attn = ggml_nn_mul_mat(ctx, attn, v);
+        // # tensor [attn@v] size: [1, 6, 2561, 64], min: -1.033432, max: 1.115259, mean: -0.009298
 
         x = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3)); // [64, 2561, 6, 1] -> [64, 6, 2561, 1] -> [384, 2561, 1]
         x = ggml_reshape_3d(ctx, x, C, N, B); // [64, 6, 2561, 1] -> [384, 2561, 1]
@@ -1874,15 +1563,6 @@ struct NestedTensorBlock {
     }
 
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* x) {
-        // def attn_residual_func(x):
-        //     return self.ls1(self.attn(self.norm1(x)))
-
-        // def ffn_residual_func(x):
-        //     return self.ls2(self.mlp(self.norm2(x)))
-
-        // x = x + attn_residual_func(x)
-        // x = x + ffn_residual_func(x)
-        // return x
         ggml_tensor_t *y = norm1.forward(ctx, x);
         y = attn.forward(ctx, y);
         y = ls1.forward(ctx, y);
@@ -1896,12 +1576,6 @@ struct NestedTensorBlock {
         return x;
     }
 };
-
-/*
- PatchEmbed(
-  (proj): Conv2d(3, 384, kernel_size=(14, 14), stride=(14, 14))
-  (norm): Identity()
-) */
 
 struct PatchEmbed {
     struct Conv2d proj;
@@ -1926,7 +1600,6 @@ struct PatchEmbed {
         // B, C, H, W = x.shape
         // x = self.proj(x)  # B C H W
         // x = x.flatten(2).transpose(1, 2)  # B HW C
-
         x = proj.forward(ctx, x);
         int W = (int)x->ne[0];
         int H = (int)x->ne[1];
@@ -1968,7 +1641,6 @@ struct DinoVisionTransformer {
         // blocks_0.dim = 384; // embed_dim
         // blocks_0.num_heads = 6;
         // blocks_0.create_weight_tensors(ctx);
-
         for (int i = 0; i < 12; i++) {
             blocks[i].dim = embed_dim;
             blocks[i].num_heads = num_heads;
@@ -2000,37 +1672,8 @@ struct DinoVisionTransformer {
         // ggml_format_name(mask_token, "%s%s", prefix, "mask_token");
     }
 
-    // def interpolate_pos_encoding(self, x, H, W):
-    //     # x.size() -- [1, 2561, 384], H -- 560, W -- 896
-    //     B, NP, D = x.size() 
-    //     N = self.pos_embed.shape[1] - 1
-    //     if N == NP - 1 and W == H:
-    //         return self.pos_embed
-
-    //     pos_embed = self.pos_embed.float() # [1, 1370, 384]
-    //     class_pos_embed = pos_embed[:, 0:1]
-    //     patch_pos_embed = pos_embed[:, 1:]
-
-    //     M = int(math.sqrt(N))  # Recover the number of patches in each dimension
-    //     assert N == M * M
-    //     NH = (H + self.patch_size - 1) // self.patch_size
-    //     NW = (W + self.patch_size - 1) // self.patch_size
-
-    //     # tensor [patch_pos_embed] size: [1, 1369, 384], min: -0.1611, max: 0.126807, mean: 8.3e-05
-    //     patch_pos_embed = patch_pos_embed.reshape(1, M, M, D)  # (1, M, M, D) -- (1, 37, 37, 384)
-    //     patch_pos_embed = patch_pos_embed.permute(0, 3, 1, 2) # [1. 37, 37, 384] --> [1, 384, 37, 37]
-
-    //     patch_pos_embed = F.interpolate(patch_pos_embed, size=(NH, NW), mode="bicubic", antialias=False)
-    //     # tensor [patch_pos_embed] size: [1, 384, 40, 64], min: -0.162149, max: 0.127178, mean: 8.2e-05
-    //     patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, D)
-    //     # tensor [patch_pos_embed] size: [1, 2560, 384], min: -0.162149, max: 0.127178, mean: 8.2e-05
-
-    //     # class_pos_embed.size() -- [1, 384]
-    //     return torch.cat((class_pos_embed, patch_pos_embed), dim=1).to(x.dtype)
-
     ggml_tensor_t* interpolate_pos_encoding(struct ggml_context* ctx, ggml_tensor_t* x, int H, int W) {
         // # x.size() -- [1, 2561, 384], H -- 560, W -- 896
-
         if (H == W && x->ne[1] == pos_embed->ne[1]) {
             return pos_embed;
         }
@@ -2052,40 +1695,6 @@ struct DinoVisionTransformer {
 
         return x;
     }
-
-    // def forward(self, x):
-    //     # tensor [x] size: [1, 3, 560, 896], min: -0.495599, max: 0.496816, mean: -0.109927
-    //     B, C, H, W = x.shape
-
-    //     x = self.patch_embed(x)
-    //     # tensor [x] size: [1, 2560, 384], min: -0.818547, max: 0.587891, mean: -0.002679
-
-    //     x = torch.cat((self.cls_token.expand(B, 1, -1), x), dim=1)
-    //     # tensor [x] size: [1, 2561, 384], min: -0.818547, max: 0.587891, mean: -0.002678
-
-    //     x = x + self.interpolate_pos_encoding(x, H, W)
-
-    //     NH = (H + self.patch_size - 1) // self.patch_size
-    //     NW = (W + self.patch_size - 1) // self.patch_size
-
-    //     outputs = []
-    //     for i, blk in enumerate(self.blocks):
-    //         x = blk(x)
-    //         if i in [8, 9, 10, 11]:
-    //             out = self.norm(x)  # [1, 2561, 384]
-    //             out = out[:, 1:, :] # [1, 2560, 384]
-    //             # w // self.patch_size, h // self.patch_size === 40, 64
-    //             out = out.reshape(B, NH, NW, -1).permute(0, 3, 1, 2).contiguous()
-    //             # [1, 40, 60, 384] --> [1, 384, 40, 64]
-    //             outputs.append(out)
-
-    //     # outputs is list: len = 4
-    //     #     tensor [item] size: [1, 384, 40, 64], min: -64.29377, max: 62.932507, mean: 0.046734
-    //     #     tensor [item] size: [1, 384, 40, 64], min: -58.107525, max: 53.356197, mean: 0.016807
-    //     #     tensor [item] size: [1, 384, 40, 64], min: -48.493, max: 43.823879, mean: 0.01582
-    //     #     tensor [item] size: [1, 384, 40, 64], min: -22.330799, max: 15.610704, mean: 0.011709
-    //     return outputs
-
 
     std::vector<ggml_tensor_t *> forward(struct ggml_context* ctx, ggml_tensor_t* x) {
         // # tensor [x] size: [1, 3, 560, 896], min: -0.495599, max: 0.496816, mean: -0.109927
@@ -2110,16 +1719,6 @@ struct DinoVisionTransformer {
         int NH = (H + patch_size - 1)/patch_size;
         int NW = (W + patch_size - 1)/patch_size;
 
-        //     outputs = []
-        //     for i, blk in enumerate(self.blocks):
-        //         x = blk(x)
-        //         if i in [8, 9, 10, 11]:
-        //             out = self.norm(x)  # [1, 2561, 384]
-        //             out = out[:, 1:, :] # [1, 2560, 384]
-        //             # w // self.patch_size, h // self.patch_size === 40, 64
-        //             out = out.reshape(B, NH, NW, -1).permute(0, 3, 1, 2).contiguous()
-        //             # [1, 40, 64, 384] --> [1, 384, 40, 64]
-        //             outputs.append(out)
         for (int i = 0; i < 12; i++) {
             x = blocks[i].forward(ctx, x);
             if (i < 8)
@@ -2175,29 +1774,18 @@ struct Segmentor {
 
     ggml_tensor_t* forward(struct ggml_context* ctx, ggml_tensor_t* x) {
         // # tensor [x] size: [1, 3, 560, 896], min: -0.994517, max: 1.0, mean: -0.189531
+
+        std::vector<ggml_tensor_t *> tokens = backbone.forward(ctx, x);
         // tokens = self.backbone(x) #.get_intermediate_layers(x, n=[8, 9, 10, 11], reshape=True) # last n=4 [8, 9, 10, 11]
         // # tokens is tuple: len = 4
         // #     tensor [item] size: [1, 384, 40, 64], min: -64.093712, max: 65.633827, mean: 0.04372
         // #     tensor [item] size: [1, 384, 40, 64], min: -60.8563, max: 49.656631, mean: 0.003902
         // #     tensor [item] size: [1, 384, 40, 64], min: -46.128963, max: 40.135544, mean: 0.009809
         // #     tensor [item] size: [1, 384, 40, 64], min: -21.549391, max: 19.685974, mean: 0.007802
-        // f16 = torch.cat(tokens, dim=1)
-        // # tensor [f16] size: [1, 1536, 40, 64], min: -64.093712, max: 65.633827, mean: 0.016308
-        // f16 = self.conv3(f16)
-        // f16 = self.bn3(f16)
-        // f16 = F.relu(f16)
-        // old_size = (f16.shape[2], f16.shape[3])
-        // new_size = (int(old_size[0]*14/16), int(old_size[1]*14/16))
-        // f16 = F.interpolate(f16, size=new_size, mode='bilinear', align_corners=False) # scale_factor=3.5
-        // # tensor [f16] size: [1, 1536, 35, 56], min: 0.0, max: 10.015625, mean: 0.865097
-        // return f16
-        std::vector<ggml_tensor_t *> tokens = backbone.forward(ctx, x);
         ggml_tensor_t *f16 = ggml_cat(ctx, 4, tokens[0], tokens[1], tokens[2], tokens[3], 2/*dim on C*/);
         // # tensor [f16] size: [1, 1536, 40, 64], min: -64.088036, max: 62.895596, mean: 0.022864
-
         f16 = conv3.forward(ctx, f16);
         // f16    f32 [64, 40, 1536, 1], 
-
         f16 = bn3.forward(ctx, f16);
         f16 = ggml_relu(ctx, f16);
         // # tensor [f16] size: [1, 1536, 40, 64], min: 0.0, max: 11.556356, mean: 0.868597
@@ -2210,32 +1798,10 @@ struct Segmentor {
         f16 = ggml_interpolate(ctx, f16, 1 /*dim on H*/, H);
         // # tensor [f16] size: [1, 1536, 35, 56], min: 0.0, max: 11.285922, mean: 0.868653
 
-        // // xxxx_debug
-        // {
-        //     f16 = ggml_cont(ctx, f16);
-        //     ggml_set_name(f16, "Segmentor");
-        //     ggml_set_output(f16);
-
-        //     // Info: -------- Segmentor Tensor: 1x1536x35x56
-        //     // min: -0.0218, max: 9.3393, mean: 0.8766
-        //     // tensor [Segmentor] size: [1, 1536, 35, 56], min: 0.0, max: 9.409081, mean: 0.885523
-        // }
-
-
         return f16;
     }
 };
 
-/*
- Bottleneck(
-  (conv1): Conv2d(1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
-  (bn1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-  (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
-  (bn2): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-  (conv3): Conv2d(256, 1024, kernel_size=(1, 1), stride=(1, 1), bias=False)
-  (bn3): BatchNorm2d(1024, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-  (relu): ReLU(inplace=True)
-) */
 // ----------------------------------------------------------------------------------------------------
 struct Bottleneck {
     int inplanes = 1024;
@@ -2364,34 +1930,9 @@ struct Bottleneck {
         x = ggml_add(ctx, x, residual);
         x = ggml_relu(ctx, x);
 
-        // // xxxx_debug
-        // {
-        //     x = ggml_cont(ctx, x);
-        //     ggml_set_name(x, "Bottleneck");
-        //     ggml_set_output(x);
-
-        //     // tensor [Bottleneck] size: [1, 256, 140, 224], min: 0.0, max: 1.389247, mean: 0.162346
-        //     // tensor [Bottleneck] size: [1, 256, 140, 224], min: 0.0, max: 3.826938, mean: 0.586135
-        //     // tensor [Bottleneck] size: [1, 256, 140, 224], min: 0.0, max: 1.591474, mean: 0.426964
-        //     // tensor [Bottleneck] size: [1, 512, 70, 112], min: 0.0, max: 2.778131, mean: 0.245633
-        //     // tensor [Bottleneck] size: [1, 512, 70, 112], min: 0.0, max: 2.788621, mean: 0.507712
-        //     // tensor [Bottleneck] size: [1, 512, 70, 112], min: 0.0, max: 2.168785, mean: 0.455767
-        //     // tensor [Bottleneck] size: [1, 512, 70, 112], min: 0.0, max: 2.172844, mean: 0.37428
-        //     // tensor [Bottleneck] size: [1, 1024, 35, 56], min: 0.0, max: 3.758585, mean: 0.357061
-        //     // tensor [Bottleneck] size: [1, 1024, 35, 56], min: 0.0, max: 1.726774, mean: 0.424751
-        //     // tensor [Bottleneck] size: [1, 1024, 35, 56], min: 0.0, max: 1.320799, mean: 0.455972
-        //     // tensor [Bottleneck] size: [1, 1024, 35, 56], min: 0.0, max: 1.298937, mean: 0.431875
-        //     // tensor [Bottleneck] size: [1, 1024, 35, 56], min: 0.0, max: 1.185345, mean: 0.42035
-        //     // tensor [Bottleneck] size: [1, 1024, 35, 56], min: 0.0, max: 1.97499, mean: 0.493348
-
-        //     // Info: -------- Bottleneck Tensor: 1x256x140x224
-        //     // min: 0.0000, max: 1.5897, mean: 0.4270
-        // }
-
         return x;
     }
 };
-
 
 // make_bottleneck_layer
 struct BottleneckLayer {
@@ -2564,7 +2105,6 @@ struct DINOv2_v6 {
         // g16 = self.fuse1(dino_f16, f16)
         // tensor [dino_f16] size: [1, 1536, 35, 56], min: 0.0, max: 11.285922, mean: 0.868653
         // tensor [f16] size: [1, 1024, 35, 56], min: 0.0, max: 1.415327, mean: 0.062972
-
         g16 = fuse1.forward(ctx, dino_f16, f16);
         // tensor [g16] size: [1, 1024, 35, 56], min: 0.0, max: 2.623592, mean: 0.064568
 
@@ -2604,7 +2144,6 @@ struct DINOv2_v6 {
 };
 
 struct KeyEncoder : GGMLNetwork {
-    // network params
     struct DINOv2_v6 key_encoder;
     struct KeyProjection key_proj;
 
@@ -2635,18 +2174,18 @@ struct KeyEncoder : GGMLNetwork {
    }
 };
 
-
 struct VideoColorNetwork {
-    // network hparams
-    int MAX_H = 1024;
-    int MAX_W = 1024;
-    int MAX_TIMES = 112;
-
+    const int MAX_H = 1024;
+    const int MAX_W = 1024;
+    const int MAX_TIMES = 112;
 
     KeyEncoder key_net;
     ValueEncoder value_net;
     ColorDecoder color_net;
+
+#ifdef ENABLE_LOCAL_ATTENTION
     LocalAttention local_net;
+#endif    
 
     GGMLModel model;
 
@@ -2676,11 +2215,13 @@ struct VideoColorNetwork {
         color_net.start_engine();
         // color_net.dump();
 
-        local_net.set_device(device);
+#ifdef ENABLE_LOCAL_ATTENTION
+        local_net.set_device(device); // xxxx_debug
         local_net.start_engine();
         // local_net.dump();
+#endif
 
-        check_point(model.preload("models/video_color_f32.gguf") == RET_OK);
+        check_point(model.preload("models/video_color_f16.gguf") == RET_OK);
         load();
 
         return RET_OK;
@@ -2691,7 +2232,10 @@ struct VideoColorNetwork {
         value_net.load_weight(&model, "value_encoder.");
         color_net.load_weight(&model, "decoder.");
 
+#ifdef ENABLE_LOCAL_ATTENTION
         return local_net.load_weight(&model, "short_term_attn.");
+#endif
+        return RET_OK;
     }
 
     // KeyEncoder
@@ -2703,11 +2247,10 @@ struct VideoColorNetwork {
 
         // Update shrinkage, selection, f16, f8, f4
         {
-            // xxxx_debug
             // TENSOR *x;
-            // x = key_net.get_output_tensor((char *)"CrossChannelAttention");
+            // x = key_net.get_output_tensor((char *)"DO_SOFTMAX");
             // if (tensor_valid(x)) {
-            //     tensor_debug_show("-------- CrossChannelAttention", x);
+            //     tensor_debug_show("-------- DO_SOFTMAX", x);
             //     tensor_destroy(x);
             // }
             tensor_destroy(KEY);
@@ -2774,6 +2317,7 @@ struct VideoColorNetwork {
         return color_ab;
     }
 
+#ifdef ENABLE_LOCAL_ATTENTION
     // LocalAttention
     TENSOR *encode_local(TENSOR *key, TENSOR *last_key, TENSOR *last_value) {
         TENSOR *argv[3];
@@ -2785,11 +2329,14 @@ struct VideoColorNetwork {
 
         return value;
     }
+#endif
 
     void exit() {
+        // encode_value
         tensor_destroy(VALUE);
         tensor_destroy(HIDDEN);
 
+        // encode_key
         tensor_destroy(KEY);
         tensor_destroy(SHRINKAGE);
         tensor_destroy(SELECTION);
@@ -2799,7 +2346,9 @@ struct VideoColorNetwork {
 
         model.clear();
 
+#ifdef ENABLE_LOCAL_ATTENTION
         local_net.stop_engine();
+#endif        
         color_net.stop_engine();
         value_net.stop_engine();
         key_net.stop_engine();

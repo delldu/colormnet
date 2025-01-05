@@ -63,6 +63,7 @@ struct XMemCache {
         // if (self.count < self.S):
         //     self.count = self.count + 1
         float *start;
+        
         int i = index % S;
         start = tensor_start_batch(k, i);
         memcpy(start, k2->data, 64 * H * W * sizeof(float));
@@ -87,31 +88,6 @@ struct XMem : GGMLNetwork {
     void setup_weight_names(const char *prefix) {
         GGML_UNUSED(prefix);
     }
-
-    // def get_similarity(mem_key, mem_shrinkage, query_key, query_selection):
-    //     # tensor [mem_key] size: [1, 64, 1960], min: -2.803887, max: 3.253764, mean: -0.159051
-    //     # tensor [mem_shrinkage] size: [1, 1960, 1], min: 23.295803, max: 45.933445, mean: 32.660492
-    //     # tensor [query_key] size: [1, 64, 1960], min: -2.80991, max: 3.298451, mean: -0.158671
-    //     # tensor [query_selection] size: [1, 64, 1960], min: 0.0, max: 0.905321, mean: 0.5004
-
-    //     CK = mem_key.shape[1] # 64
-
-    //     mem_key = mem_key.transpose(1, 2)
-    //     a_sq = (mem_key.pow(2) @ query_selection)
-    //     # tensor [a_sq] size: [1, 1960, 1960], min: 5.804688, max: 25.171875, mean: 13.989838
-
-    //     two_ab = 2 * (mem_key @ (query_key * query_selection))
-    //     # tensor [two_ab] size: [1, 1960, 1960], min: 6.933594, max: 44.0, mean: 22.547285
-
-    //     b_sq = (query_selection * query_key.pow(2)).sum(1, keepdim=True)
-    //     # tensor [b_sq] size: [1, 1, 1960], min: 7.427909, max: 22.625141, mean: 14.256322
-
-    //     similarity = (-a_sq + two_ab - b_sq)
-    //     similarity = similarity * mem_shrinkage / math.sqrt(CK)   # B*N*HW
-    //     # tensor [similarity] size: [1, 1960, 1960], min: -87.556335, max: -0.000922, mean: -19.917494
-
-    //     return similarity
-
 
     ggml_tensor_t* get_similarity(struct ggml_context* ctx, ggml_tensor_t* mem_key, ggml_tensor_t* mem_shrinkage, 
         ggml_tensor_t* query_key, ggml_tensor_t* query_selection) {
@@ -162,12 +138,12 @@ struct XMem : GGMLNetwork {
         value = ggml_nn_slice(ctx, topk_out, 1 /*dim*/, 0, top_k, 1/*step*/);
         index = ggml_nn_slice(ctx, topk_out, 1 /*dim*/, top_k, 2*top_k, 1/*step*/);
         value = ggml_softmax(ctx, value, 1/*dim*/);
-        {
-            value = ggml_cont(ctx, value);
-            ggml_set_name(value, "SOFTMAX");
-            ggml_set_output(value);            
-        }
-
+        // // debug
+        // {
+        //     value = ggml_cont(ctx, value);
+        //     ggml_set_name(value, "SOFTMAX");
+        //     ggml_set_output(value);            
+        // }
         affinity = ggml_dup(ctx, similarity);
         affinity = ggml_constant(ctx, affinity, 0.0f);
         affinity = ggml_paste(ctx, affinity, 1 /*dim*/, index, value);
@@ -184,7 +160,6 @@ struct XMem : GGMLNetwork {
         ggml_tensor_t* mem_shrinkage = argv[3];
         ggml_tensor_t* mem_value = argv[4];
 
-        // xxxx_debug
         int HW, C, W, H;
         HW = (int)mem_key->ne[0];
         C = (int)mem_key->ne[3];
@@ -213,17 +188,16 @@ struct XMem : GGMLNetwork {
         // tensor [similarity] size: [1, 1960, 1960], min: -87.556335, max: -0.000922, mean: -19.917494
         affinity = do_softmax(ctx, similarity, TOP_K);
         // tensor [affinity] size: [1, 1960, 1960], min: 0.0, max: 0.983038, mean: 0.00051
-        // xxxx_debug
-        {
-            similarity = ggml_cont(ctx, similarity);
-            ggml_set_name(similarity, "SIMILARITY");
-            ggml_set_output(similarity);
+        // // debug
+        // {
+        //     similarity = ggml_cont(ctx, similarity);
+        //     ggml_set_name(similarity, "SIMILARITY");
+        //     ggml_set_output(similarity);
 
-            affinity = ggml_cont(ctx, affinity);
-            ggml_set_name(affinity, "AFFINITY");
-            ggml_set_output(affinity);
-        }
-
+        //     affinity = ggml_cont(ctx, affinity);
+        //     ggml_set_name(affinity, "AFFINITY");
+        //     ggml_set_output(affinity);
+        // }
         final_value = ggml_nn_mul_mat(ctx, mem_value, affinity);
         final_value = ggml_reshape_4d(ctx, final_value, W, H, 512, 2);
         // tensor [final_value] size: [2, 512, 35, 56], min: -10.663672, max: 5.041441, mean: -0.008074
@@ -280,8 +254,8 @@ struct VideoXMemNetwork {
             tensor_debug_show((char *)"hidden", sensory);
             tensor_debug_show((char *)"last_key", lastkey);
             tensor_debug_show((char *)"last_value", lastval);
-            workmem.dump("work memory");
-            longmem.dump("long memory");
+            workmem.dump((char *)"work memory");
+            longmem.dump((char *)"long memory");
         } else {
             syslog_info("xmem is empty.");
         }
@@ -446,23 +420,11 @@ struct VideoXMemNetwork {
         argv[3] = mem_shrinkage;
         argv[4] = mem_value;
 
-        tensor_debug_show("===> key", key);
-        tensor_debug_show("===> selection", selection);
-        tensor_debug_show("===> mem_key", mem_key);
-        tensor_debug_show("===> mem_shrinkage", mem_shrinkage);
-        tensor_debug_show("===> mem_value", mem_value);
-
-        // Info: ===> key Tensor: 1x64x35x56
-        // min: -2.7878, max: 3.2375, mean: -0.1568
-        // Info: ===> selection Tensor: 1x64x35x56
-        // min: 0.0000, max: 0.9017, mean: 0.4908
-        // Info: ===> mem_key Tensor: 1x1x64x1960
-        // min: -2.7800, max: 3.1985, mean: -0.1570
-        // Info: ===> mem_shrinkage Tensor: 1x1x1960x1
-        // min: 24.1398, max: 45.3815, mean: 32.6919
-        // Info: ===> mem_value Tensor: 1x2x512x1960
-        // min: -11.2847, max: 5.3647, mean: -0.0028
-
+        // tensor_debug_show("===> key", key);
+        // tensor_debug_show("===> selection", selection);
+        // tensor_debug_show("===> mem_key", mem_key);
+        // tensor_debug_show("===> mem_shrinkage", mem_shrinkage);
+        // tensor_debug_show("===> mem_value", mem_value);
 
         // tensor [q_key] size: [1, 64, 1960], min: -2.80991, max: 3.298451, mean: -0.158671
         // tensor [q_selection] size: [1, 64, 1960], min: 0.0, max: 0.905321, mean: 0.5004
@@ -472,48 +434,16 @@ struct VideoXMemNetwork {
 
         // XMem
         TENSOR *value = net.engine_forward(ARRAY_SIZE(argv), argv);
-        tensor_debug_show("===> value", value);
+        // tensor_debug_show("===> value", value);
+
         // tensor [similarity] size: [1, 1960, 1960], min: -87.556335, max: -0.000922, mean: -19.917494
         // tensor [affinity] size: [1, 1960, 1960], min: 0.0, max: 0.983038, mean: 0.00051
         // tensor [final_value] size: [2, 512, 35, 56], min: -10.663672, max: 5.041441, mean: -0.008074
-
-        printf("-----------------------------------------------------------\n");
-
         // destroy mem_*
         {
             tensor_destroy(mem_key);
             tensor_destroy(mem_shrinkage);
             tensor_destroy(mem_value);
-
-            TENSOR *x;
-            x = net.get_output_tensor((char *)"SIMILARITY");
-            if (tensor_valid(x)) {
-                tensor_debug_show("---- SIMILARITY", x);
-                tensor_destroy(x);
-            }
-
-            x = net.get_output_tensor((char *)"SOFTMAX");
-            if (tensor_valid(x)) {
-                tensor_debug_show("---- SOFTMAX", x);
-                tensor_destroy(x);
-            }
-
-
-            x = net.get_output_tensor((char *)"AFFINITY");
-            if (tensor_valid(x)) {
-                tensor_debug_show("---- AFFINITY", x);
-                tensor_destroy(x);
-            }
-
-            // Info: -------- SIMILARITY Tensor: 1x1x1960x1960
-            // min: -85.5895, max: -0.0011, mean: -20.1732
-            // Info: -------- SOFTMAX Tensor: 1x1x30x1960
-            // min: 0.0000, max: 0.9724, mean: 0.0333
-            // Info: -------- AFFINITY Tensor: 1x1x1960x1960
-            // min: 0.0000, max: 0.9724, mean: 0.0005
-
-            // Info: ===> value Tensor: 2x512x35x56
-            // min: -10.5401, max: 4.8808, mean: -0.0028
         }
 
         return value;
@@ -521,8 +451,7 @@ struct VideoXMemNetwork {
 
     // -----------------------------------------------------------------------------------------
     void exit() {
-        // free_cache();
-
+        free_cache();
         net.stop_engine();
     }
 };

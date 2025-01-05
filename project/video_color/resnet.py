@@ -114,7 +114,6 @@ class Bottleneck(nn.Module):
                 nn.BatchNorm2d(planes * self.expansion))
 
     def forward(self, x):
-        # x = torch_nn_arange(x)
         residual = x
 
         out = self.conv1(x)
@@ -135,9 +134,6 @@ class Bottleneck(nn.Module):
         # tensor [residual] size: [1, 256, 140, 224], min: -0.548443, max: 0.556349, mean: 0.061899
         out += residual
         out = self.relu(out)
-
-        # todos.debug.output_var("Bottleneck", out)
-        # print("-" * 80)
 
         return out
 
@@ -257,19 +253,11 @@ class CrossChannelAttention(nn.Module):
         )
 
     def forward(self, encoder, decoder):
-        # encoder = torch_nn_arange(encoder)
-        # decoder = torch_nn_arange(decoder)
-
         b, c, h, w = encoder.shape
-
-        # todos.debug.output_var("encoder", encoder)
-        # todos.debug.output_var("decoder", decoder)
-
 
         q = self.to_q_dw(self.to_q(encoder))
         k = self.to_k_dw(self.to_k(decoder))
         v = self.to_v_dw(self.to_v(decoder))
-        # xxxx_debug
 
         # [1, 2048, 35, 56] --> [1, 2048, HW] --> [1, 8, 256, HW]
         # q2 = q.view(b, -1, h*w).view(b, self.heads, -1, h*w)
@@ -303,12 +291,7 @@ class CrossChannelAttention(nn.Module):
         # tensor [out2] size: [1, 2048, 35, 56], min: -0.91977, max: 1.421521, mean: 0.080392
         # todos.debug.output_var("|out - out2|", (out - out2).abs())
 
-        # todos.debug.output_var("out", self.to_out(out))
-        # print("-" * 80)
-
         out = self.to_out(out)
-        # todos.debug.output_var("CrossChannelAttention", out)
-        # print("-" * 80)
 
         return out
 
@@ -329,21 +312,14 @@ class Fuse(nn.Module):
         enc = self.norm1(enc)
         dec = self.norm2(dec)
 
-        # todos.debug.output_var("enc", enc)
-        # todos.debug.output_var("dec", dec)
-
         # tensor [enc] size: [1, 1024, 35, 56], min: -11.505666, max: 2.44047, mean: 0.000167
         # tensor [dec] size: [1, 1024, 35, 56], min: -0.646519, max: 10.31074, mean: 0.000101
         output = self.crossattn(enc, dec) + res
         # tensor [output] size: [1, 1024, 35, 56], min: -318.123413, max: 70.843498, mean: 9.195792
-        # todos.debug.output_var("output1", output)
 
         output = self.norm3(output)
         output = self.relu3(output)
         # tensor [output] size: [1, 1024, 35, 56], min: 0.0, max: 2.623592, mean: 0.064568
-
-        # todos.debug.output_var("output2", output)
-        # print("-" * 80)
 
         return output
 

@@ -119,32 +119,13 @@ int video_color_predict(VideoColorNetwork *color_net, VideoXMemNetwork *xmem_net
     C = rgb_tensor->chan;
     H = rgb_tensor->height;
     W = rgb_tensor->width;
-    xmem_net->alloc_cache(H/16, W/16, 8 /*WORKMEM_SIZE*/, example_glob.gl_pathc /*LONGMEM_SIZE*/);
+    xmem_net->alloc_cache(H/16, W/16, 4 /*WORKMEM_SIZE*/, example_glob.gl_pathc /*LONGMEM_SIZE*/);
     tensor_destroy(rgb_tensor);
-
-
-    // Decode examples
-    // hidden_state = torch.zeros(2, 64, H//16, W//16).to(device)
-    // for f in example_images:
-    //     print(f"encode examples {f} ...")
-    //     image = todos.data.load_tensor(f)
-    //     B2, C2, H2, W2 = image.size()
-    //     if H2 != H or W2 != W:        
-    //         image = F.interpolate(image, size=(H, W), mode="bilinear")
-    //     image = image.to(device)
-    //     image_lll, image_ab = rgb_lab(image)
-    //     with torch.no_grad():
-    //         key, shrinkage, selection, f16, f8, f4 = model.encode_key(image_lll)
-    //         value, hidden = model.encode_value(image_lll, f16, hidden_state, image_ab)
-    //     xmem.set_long_memory(key, shrinkage, value)
-    //     xmem.set_hidden(hidden)
-    //     xmem.set_last_key(key)
-    //     xmem.set_last_value(value)
 
     TENSOR *zero_hidden = tensor_create(2, 64, H/16, W/16);
     check_tensor(zero_hidden);
     for (int i = example_glob.gl_pathc - 1; i >= 0; i--) {
-        CheckPoint("%s ...", example_glob.gl_pathv[i]);
+        syslog_info("Encoding example file '%s' ...", example_glob.gl_pathv[i]);
 
         rgb_tensor = tensor_load_image(example_glob.gl_pathv[i], 0 /*with_alpha */ );
         tensor_zoom_(rgb_tensor, H, W);
@@ -190,74 +171,52 @@ int video_color_predict(VideoColorNetwork *color_net, VideoXMemNetwork *xmem_net
     tensor_destroy(zero_hidden);
     xmem_net->dump();
 
-    // Decode gray images ...
-    // input_rgb = input_rgb.to(device)
-    // image_lll, image_ab = rgb_lab(input_rgb)
-    // with torch.no_grad():
-    //     key, shrinkage, selection, f16, f8, f4 = model.encode_key(image_lll)
-
-    //     multi_scale_features = (f16, f8, f4)
-    //     value = xmem.forward(key, selection)
-    //     hidden = xmem.get_hidden()
-
-    //     # reference local frame ...
-    //     last_key = xmem.get_last_key()
-    //     last_value = xmem.get_last_value()
-    //     short_value = model.short_term_attn(key, last_key, last_value)
-    //     value = value + short_value
-
-    //     # hidden, predict_ab = model.decode_color(multi_scale_features, value, hidden)
-    //     predict_ab = model.decode_color(multi_scale_features, value, hidden)
-
-    //     output_l = image_lll[:, 0:1, :, :] * 100.0
-    //     output_ab = predict_ab * 110.0
-    //     output_lab = torch.cat([output_l, output_ab], dim=1)
-    //     output_rgb = data.lab2rgb(output_lab)
-    //     del image_ab, selection, f8, f4, output_l, output_ab, output_lab
-
-    // # save the frames
-    // temp_output_file = "{}/{:06d}.png".format(output_dir, no + 1)
-    // todos.data.save_tensor(output_rgb, temp_output_file)
-
-    // if no % 5 == 0:
-    //     # update work memory
-    //     value, hidden = model.encode_value(image_lll, f16, hidden, predict_ab[:, 0:2, :, :])
-    //     xmem.set_work_memory(key, shrinkage, value)
-    //     xmem.set_hidden(hidden)            
-    //     xmem.set_last_key(key)
-    //     xmem.set_last_value(value)
-
     for (int i = 0; i < gray_glob.gl_pathc; i++) {
+        syslog_info("Decoding file '%s' ...", gray_glob.gl_pathv[i]);
+
         rgb_tensor = tensor_load_image(gray_glob.gl_pathv[i], 0 /*with_alpha */ );
         tensor_zoom_(rgb_tensor, H, W);
         lab_tensor = tensor_rgb2lab(rgb_tensor);
         tensor_destroy(rgb_tensor);
-        // CheckPoint();
 
         image_lll = lab_lll(lab_tensor);
         key = color_net->encode_key(image_lll);
 
-        // CheckPoint();
-        value = xmem_net->query_value(color_net->KEY, color_net->SELECTION);
-
-        // CheckPoint();
+        value = xmem_net->query_value(color_net->KEY, color_net->SELECTION); // come from xmem ,,,
         // # multi_scale_features(f16, f8, f4) is tuple: len = 3
         // #     tensor [item] size: [1, 1024, 35, 56], min: 0.0, max: 2.601784, mean: 0.063031
         // #     tensor [item] size: [1, 512, 70, 112], min: 0.0, max: 1.79675, mean: 0.090695
         // #     tensor [item] size: [1, 256, 140, 224], min: 0.0, max: 6.709424, mean: 0.200673
         // # tensor [value] size: [2, 512, 35, 56], min: -9.328125, max: 4.738281, mean: -0.007783
         // # tensor [hidden] size: [2, 64, 35, 56], min: -1.0, max: 0.999023, mean: -0.009137      
-        tensor_debug_show("---- F16", color_net->F16);
-        tensor_debug_show("---- F8", color_net->F8);
-        tensor_debug_show("---- F4", color_net->F4);
-        tensor_debug_show("---- value", value);
-        tensor_debug_show("---- HIDDEN", color_net->HIDDEN);
+        // tensor_debug_show("---- F16", color_net->F16);
+        // tensor_debug_show("---- F8", color_net->F8);
+        // tensor_debug_show("---- F4", color_net->F4);
+        // tensor_debug_show("---- value", value);
+        // tensor_debug_show("---- HIDDEN", color_net->HIDDEN);
 
-        predict_ab = color_net->decode_color(color_net->F16, color_net->F8, color_net->F4, value, color_net->HIDDEN);
-        tensor_debug_show("---- predict_ab", predict_ab);
+        // hidden = xmem.get_hidden()
+
+        // # reference local frame ...
+        // last_key = xmem.get_last_key()
+        // last_value = xmem.get_last_value()
+        // short_value = model.short_term_attn(key, last_key, last_value)
+        // value = value + short_value
+#ifdef ENABLE_LOCAL_ATTENTION
+        {
+            TENSOR *local_value = color_net->encode_local(key, xmem_net->get_last_key(), xmem_net->get_last_value());
+            check_tensor(local_value);
+            GGML_ASSERT(tensor_are_same_shape(value, local_value));
+            int n = value->batch * value->chan * value->height * value->width;
+            for (int i = 0; i < n; i++) {
+                value->data[i] += local_value->data[i];
+            }
+            tensor_destroy(local_value);
+        }
+#endif
+        predict_ab = color_net->decode_color(color_net->F16, color_net->F8, color_net->F4, value, xmem_net->get_hidden());
+        // tensor_debug_show("---- predict_ab", predict_ab);
         tensor_destroy(value);
-
-        // CheckPoint();
 
         // output ...
         lab_update(lab_tensor, predict_ab);
@@ -267,15 +226,11 @@ int video_color_predict(VideoColorNetwork *color_net, VideoXMemNetwork *xmem_net
         tensor_destroy(rgb_tensor);
         tensor_destroy(lab_tensor);
 
-        // CheckPoint();
-
-        // if (i % 5 == 0) {
-        //     value = color_net->encode_value(image_lll, color_net->F16, color_net->HIDDEN, predict_ab);
-        //     xmem_net->set_work_memory(color_net->KEY, color_net->SHRINKAGE, color_net->VALUE, color_net->HIDDEN);
-        //     tensor_destroy(value);
-        // }
-
-        // CheckPoint();
+        if (i % 5 == 0) {
+            value = color_net->encode_value(image_lll, color_net->F16, color_net->HIDDEN, predict_ab);
+            xmem_net->set_work_memory(color_net->KEY, color_net->SHRINKAGE, color_net->VALUE, color_net->HIDDEN);
+            tensor_destroy(value);
+        }
 
         tensor_destroy(image_lll);
         tensor_destroy(lab_tensor);

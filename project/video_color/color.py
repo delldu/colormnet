@@ -162,21 +162,9 @@ class DINOv2_v6(nn.Module):
         dino_f16 = self.network2(f) # 1/14, 384  ->   interp to 1/16
         # tensor [dino_f16] size: [1, 1536, 35, 56], min: 0.0, max: 10.015625, mean: 0.865097
 
-        # todos.debug.output_var("dino_f16", dino_f16)
-        # todos.debug.output_var("f16", f16)
         g16 = self.fuse1(dino_f16, f16)
-        # todos.debug.output_var("g16==>", g16)
-
-        # todos.debug.output_var("g8", self.upsample2(dino_f16))
-        # todos.debug.output_var("f8", f8)
         g8 = self.fuse2(self.upsample2(dino_f16), f8)
-        # todos.debug.output_var("g8==>", g8)
-
-        # todos.debug.output_var("g4", self.upsample4(dino_f16))
-        # todos.debug.output_var("f4", f4)
         g4 = self.fuse3(self.upsample4(dino_f16), f4)
-        # todos.debug.output_var("g4==>", g4)
-        # print("-" * 80)
 
         # tensor [g16] size: [1, 1024, 35, 56], min: 0.0, max: 2.594945, mean: 0.063114
         # tensor [g8] size: [1, 512, 70, 112], min: 0.0, max: 1.842727, mean: 0.090533
@@ -193,8 +181,6 @@ class Segmentor(nn.Module):
         self.bn3 = nn.BatchNorm2d(1536)
 
     def forward(self, x):
-        # x = torch_nn_arange(x)
-
         # tensor [x] size: [1, 3, 560, 896], min: -0.994517, max: 1.0, mean: -0.189531
         tokens = self.backbone(x) #.get_intermediate_layers(x, n=[8, 9, 10, 11], reshape=True) # last n=4 [8, 9, 10, 11]
         # tokens is tuple: len = 4
@@ -214,9 +200,6 @@ class Segmentor(nn.Module):
         new_size = (int(old_size[0]*14/16), int(old_size[1]*14/16))
         f16 = F.interpolate(f16, size=new_size, mode='bilinear', align_corners=False) # scale_factor=3.5
         # tensor [f16] size: [1, 1536, 35, 56], min: 0.0, max: 11.285922, mean: 0.868653
-
-        # todos.debug.output_var("Segmentor", f16)
-        # print("-" * 80)
 
         return f16
 
@@ -442,7 +425,6 @@ class LocalAttention(nn.Module):
         self.relative_emb_k = nn.Conv2d(d_att, self.window_size * self.window_size, kernel_size=1)
         # self.relative_emb_k -- Conv2d(64, 225, kernel_size=(1, 1), stride=(1, 1))
 
-        # xxxx_debug
         # self.correlation_sampler = SpatialCorrelationSampler(
         #     kernel_size=1,
         #     patch_size=self.window_size, # 15
@@ -470,7 +452,6 @@ class LocalAttention(nn.Module):
         # --------------------------------------------------------------------------------
         # qk = self.correlation_sampler(q, k).view(1, self.window_size * self.window_size, H * W)
         qk = self.corr(q, k).view(1, self.window_size * self.window_size, H * W)
-        # qk.size() -- [1, 225, 1960], 1960 == 35 * 56
         # tensor [qk] size: [1, 225, 1960], min: 0.0, max: 5.768151, mean: 3.323745
 
         relative_emb = self.relative_emb_k(q)
@@ -587,7 +568,6 @@ class GroupResBlock(nn.Module):
         if in_dim == out_dim:
             self.downsample = None
         else:
-            # xxxx_debug
             self.downsample = nn.Conv2d(in_dim, out_dim, kernel_size=3, padding=1)
 
         self.conv1 = nn.Conv2d(in_dim, out_dim, kernel_size=3, padding=1)
@@ -654,7 +634,6 @@ class ChannelPool(nn.Module):
         # tensor [x] size: [2, 512, 35, 56], min: -5.116851, max: 2.511841, mean: -0.022028
         # (Pdb) torch.max(x,1)[0].size() -- torch.Size([2, 35, 56]) ==> [2, 1, 35, 56]
         # torch.mean(x,1).size() -- [2, 35, 56] ==> [2, 1, 35, 35]
-        # xxxx_debug -- ggml_max_ext ... ?
         return torch.cat( (torch.max(x,1)[0].unsqueeze(1), torch.mean(x,1).unsqueeze(1)), dim=1) #[2, 2, 35, 56]
 
 class SpatialGate(nn.Module):
@@ -694,12 +673,6 @@ class ColorDecoder(nn.Module):
         self.pred = nn.Conv2d(256, 1, kernel_size=3, padding=1, stride=1)
 
     def forward(self, f16, f8, f4, color_feature, hidden_state):
-        todos.debug.output_var("ColorDecoder f16", f16)
-        todos.debug.output_var("ColorDecoder f8", f8)
-        todos.debug.output_var("ColorDecoder f4", f4)
-        todos.debug.output_var("ColorDecoder color_feature", color_feature)
-        todos.debug.output_var("ColorDecoder hidden_state", hidden_state)
-
         g16 = self.fuser(f16, torch.cat([color_feature, hidden_state], dim=1))
         # tensor [g16] size: [2, 512, 35, 56], min: -89.383621, max: 14.023798, mean: -1.546733
 
@@ -716,8 +689,6 @@ class ColorDecoder(nn.Module):
         logits = logits.permute(1, 0, 2, 3).contiguous() # (C, B, H, W) --> (B, C, H, W)
         # tensor [logits] size: [1, 2, 560, 896], min: -0.472656, max: 0.702148, mean: 0.024722
         color_ab = torch.tanh(logits)
-        todos.debug.output_var("ColorDecoder color_ab", color_ab)
-        print("=" * 80)
 
         # return hidden_state, color_ab
         return color_ab
@@ -742,10 +713,7 @@ class HiddenUpdater(nn.Module):
             self.g8_conv(F.interpolate(g[1], scale_factor=0.5, mode='area', align_corners=None)) + \
             self.g4_conv(F.interpolate(g[2], scale_factor=0.25, mode='area', align_corners=None))
 
-        todos.debug.output_var("g", g)
-        todos.debug.output_var("h", h)
         g = torch.cat([g, h], dim=1)
-        todos.debug.output_var("ggg", g)
 
         # defined slightly differently than standard GRU, 
         # namely the new value is generated before the forget gate.
@@ -760,9 +728,6 @@ class HiddenUpdater(nn.Module):
 
         new_h = forget_gate*h*(1-update_gate) + update_gate*new_value
         # tensor [new_h] size: [2, 64, 35, 56], min: -3.057797, max: 3.071628, mean: 0.050769
-
-        todos.debug.output_var("new_h", new_h)
-        print("-" * 80)
 
         return new_h
 
@@ -791,4 +756,5 @@ class UpsampleBlock(nn.Module):
         # tensor [g] size: [2, 256, 70, 112], min: -7.59375, max: 18.921875, mean: -0.155025
 
         return g
+
 

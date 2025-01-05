@@ -150,49 +150,15 @@ class XMem(nn.Module):
         mem_shrinkage = self._get_shringage()
         mem_value = self._get_value()
 
-        todos.debug.output_var("q_key", q_key)
-        todos.debug.output_var("q_selection", q_selection)
-        todos.debug.output_var("mem_key", mem_key)
-        todos.debug.output_var("mem_shrinkage", mem_shrinkage)
-        todos.debug.output_var("mem_value", mem_value)
-
-
         # 9800 === 5*HW
         similarity = get_similarity(mem_key, mem_shrinkage, q_key, q_selection)
-        todos.debug.output_var("similarity", similarity)
 
         affinity = do_softmax(similarity, self.TOP_K)
-        todos.debug.output_var("affinity", affinity)
 
         final_value = mem_value @ affinity
         final_value = final_value.view(2, 512, self.H, self.W)
-        todos.debug.output_var("final_value", final_value)
-        print("-" * 80)
 
         return final_value
 
     def forward(self, q_key, q_selection):
         return self.get_value(q_key, q_selection)
-
-
-if __name__ == "__main__":
-    H, W, WORK_SIZE, LONG_SIZE = 32, 64, 8, 8
-
-    xmem = XMem(H, W, WORK_SIZE, LONG_SIZE)
-    for i in range(3):
-        k = torch.randn(1, 64, H, W)
-        s = torch.randn(1, 1, H, W)
-        v = torch.randn(2, 512, H, W)
-        xmem.set_long_memory(k, s, v)
-
-    for i in range(20):
-        k = torch.randn(1, 64, H, W)
-        s = torch.randn(1, 1, H, W)
-        v = torch.randn(2, 512, H, W)
-        xmem.set_work_memory(k, s, v)
-
-    q_key = torch.randn(1, 64, H, W)
-    q_selection = torch.randn(1, 64, H, W)
-
-    todos.debug.output_var("query value", xmem.get_value(q_key, q_selection))
-    
